@@ -1,0 +1,3 @@
+max_len_seq: 7
+noise_range: [0, 1]
+signal_range: [0, 2]
