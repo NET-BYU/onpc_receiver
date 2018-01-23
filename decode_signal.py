@@ -192,7 +192,7 @@ def decode_signal(samples, symbol):
 
     for packet in packets:
         LOGGER.debug("PACKET packet: %s", packet)
-        LOGGER.debug("Result: %s", (np.array([1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1]) == np.array(packet)).all())
+        LOGGER.warning("Result: %s", (np.array([1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1]) == np.array(packet)).all())
 
 
 def downsample(samples, amount=1):
@@ -210,17 +210,17 @@ def bits(number):
         yield int(digit)
 
 
-def create_samples(symbol, data, rng, signal_range, noise_range):
-    LOGGER.debug("Signal Range: %s", signal_range)
-    LOGGER.debug("Noise Range: %s", noise_range)
+def create_samples(symbol, data, rng, signal_params, noise_params):
+    LOGGER.debug("Signal Range: %s", signal_params)
+    LOGGER.debug("Noise Range: %s", noise_params)
 
     def h():
         signals.append(1)
-        return rng.randint(*signal_range)
+        return rng.gauss(**signal_params)
 
     def n():
         signals.append(0)
-        return rng.randint(*noise_range)
+        return rng.gauss(**noise_params)
 
     def noise(num):
         yield from (n() for _ in range(num))
@@ -258,11 +258,22 @@ def main(id_, folder, params):
     global LOGGER
     LOGGER = logging.getLogger("{}".format(id_))
     formatter = logging.Formatter('%(asctime)s:%(levelname)s:%(name)s:%(message)s')
-    fileHandler = logging.FileHandler('{}/{:04}.log'.format(folder, id_), mode='w')
-    fileHandler.setFormatter(formatter)
-    LOGGER.setLevel(logging.DEBUG)
-    LOGGER.addHandler(fileHandler)
 
+    if folder is not None:
+        folder_name = '{}/{:04}.log'.format(folder, id_)
+    else:
+        folder_name = 'out.log'
+
+
+    handler = logging.FileHandler(folder_name, mode='w')
+    handler.setFormatter(formatter)
+
+    LOGGER.addHandler(handler)
+
+    if params.get('logging_output', True):
+        LOGGER.setLevel(logging.DEBUG)
+    else:
+        LOGGER.setLevel(logging.WARN)
 
     if 'max_len_seq' in params:
         global SYMBOL_SIZE
@@ -281,8 +292,8 @@ def main(id_, folder, params):
     rng = random.Random(seed)
 
     samples = create_samples(symbol, data, rng,
-                             signal_range=params.get('signal_range', [1, 2]),
-                             noise_range=params.get('noise_range', [0, 1]))
+                             signal_params=params.get('signal', [1, 2]),
+                             noise_params=params.get('noise', [0, 1]))
     samples = list(samples)
 
 
@@ -291,17 +302,22 @@ def main(id_, folder, params):
 
 
     # fig = plt.figure()
-    # ax1 = fig.add_subplot(211)
-    # ax2 = fig.add_subplot(212)
+    # ax1 = fig.add_subplot(311)
+    # ax2 = fig.add_subplot(312)
+    # ax3 = fig.add_subplot(313)
 
     # ax1.plot(np.array(samps))
-    # ax1.plot(np.array(signals))
-    # ax2.plot(np.array(correlation))
+    # ax2.plot(np.array(signals))
+    # ax3.plot(np.array(correlation))
     # # ax.plot(np.array(correlation_threshold))
     # # ax.plot(np.array(correlation_threshold) * -1)
 
-    # plt.savefig('test.pdf')
+    # plt.savefig('signal.pdf')
 
 
 if __name__ == '__main__':
-    main()
+    import yaml
+    with open('experiment_config.yaml') as f:
+        config = yaml.load(f)
+
+    main(__name__, None, config)

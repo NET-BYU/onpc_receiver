@@ -9,6 +9,7 @@ import time
 import click
 from tqdm import tqdm
 import yaml
+import psutil
 
 
 @click.group()
@@ -36,7 +37,7 @@ def run(config_file, num):
 
     # Run experiments
     with tqdm(total=num) as pbar:
-        with concurrent.futures.ProcessPoolExecutor(max_workers=8) as executor:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=psutil.cpu_count()) as executor:
             ids = range(1, num + 1)
             folders = itertools.repeat(os.path.join('tests', str(now)))
             params = itertools.repeat(config)

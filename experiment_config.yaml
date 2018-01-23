@@ -1,3 +1,12 @@
-max_len_seq: 7
-noise_range: [0, 1]
-signal_range: [0, 2]
+max_len_seq: 11
+
+noise:
+  mu: 4.7837
+  sigma: 5.3322
+
+signal:
+  # mu: 9.5674
+  mu: 5.5
+  sigma: .5
+
+logging_output: no
