@@ -1,12 +1,12 @@
-max_len_seq: 11
+# max_len_seq: 11
+max_len_seq: 13
 
 noise:
-  mu: 4.7837
+  mu: -90
   sigma: 5.3322
 
-signal:
-  # mu: 9.5674
-  mu: 5.5
-  sigma: .5
+signal: -100
+
+quantization: 1
 
 logging_output: no

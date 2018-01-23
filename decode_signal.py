@@ -1,6 +1,7 @@
 from collections import deque
 from itertools import chain
 import logging
+from math import log10
 import random
 import sys
 import time
@@ -16,15 +17,17 @@ from scipy import signal
 LOGGER = None
 SYMBOL_SIZE = 15
 CORR_BUFFER_SIZE = SYMBOL_SIZE * 5
-CORR_STD_FACTOR = 2
+CORR_STD_FACTOR = 3
 SYNC_WORD = np.array([1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 0])
 SYNC_WORD_FUZZ = 3
-DATA_SIZE = 16
+DATA_SIZE = 0
 
 signals = []
 samps = []
 correlation = []
 correlation_threshold = []
+correlation_threshold_high = []
+correlation_threshold_low = []
 bits = []
 
 # Time:
@@ -71,6 +74,9 @@ def detect_symbols(correlations):
     for i in range(len(corr_buffer) - 1):
         corr_buffer = np.roll(corr_buffer, -1)
         corr_buffer[-1] = next(correlations)
+        correlation.append(corr_buffer[-1])
+        correlation_threshold_high.append(np.nan)
+        correlation_threshold_low.append(np.nan)
         index += 1
 
     for corr in correlations:
@@ -78,17 +84,20 @@ def detect_symbols(correlations):
         corr_buffer = np.roll(corr_buffer, -1)
         corr_buffer[-1] = corr
 
-        corr_threshold = corr_buffer.mean() + CORR_STD_FACTOR * corr_buffer.std()
+        corr_threshold_high = corr_buffer.mean() + CORR_STD_FACTOR * corr_buffer.std()
+        corr_threshold_low = corr_buffer.mean() - CORR_STD_FACTOR * corr_buffer.std()
 
         LOGGER.debug("DETECT Corr Buffer: \n%s", corr_buffer)
         LOGGER.debug("DETECT Mean: %s", corr_buffer.mean())
         LOGGER.debug("DETECT Std: %s", corr_buffer.std())
-        LOGGER.debug("DETECT threshold: %s", corr_threshold)
+        LOGGER.debug("DETECT High threshold: %s", corr_threshold_high)
+        LOGGER.debug("DETECT Low threshold: %s", corr_threshold_low)
         LOGGER.debug("DETECT value: %s", corr_buffer[-1])
         LOGGER.debug("DETECT index: %s", index)
 
-        # correlation.append(corr_buffer[-1])
-        # correlation_threshold.append(corr_threshold)
+        correlation.append(corr_buffer[-1])
+        correlation_threshold_high.append(corr_threshold_high)
+        correlation_threshold_low.append(corr_threshold_low)
         # bits.append(None)
 
         # Only if the peak is maintained for a whole symbol size will it be considered a symbol
@@ -104,6 +113,9 @@ def detect_symbols(correlations):
             # correlation should be our symbol.
             corr = next(correlations)
             index += 1
+            correlation.append(corr)
+            correlation_threshold_high.append(np.nan)
+            correlation_threshold_low.append(np.nan)
             LOGGER.debug("DETECT Bit 2: %s", corr)
             yield corr
 
@@ -113,7 +125,10 @@ def detect_symbols(correlations):
                     for _ in range(SYMBOL_SIZE):
                         corr = next(correlations)
                         index += 1
-                    LOGGER.debug("DETECT Bit %s: %s", i + 2, corr)
+                        correlation.append(corr)
+                        correlation_threshold_high.append(np.nan)
+                        correlation_threshold_low.append(np.nan)
+                    LOGGER.debug("DETECT Bit %s: %s", i + 3, corr)
                     yield corr
 
                 # Found the sync word, keep going!
@@ -122,6 +137,9 @@ def detect_symbols(correlations):
                     for _ in range(SYMBOL_SIZE):
                         corr = next(correlations)
                         index += 1
+                        correlation.append(corr)
+                        correlation_threshold_high.append(np.nan)
+                        correlation_threshold_low.append(np.nan)
                     LOGGER.debug("DETECT Bit %s: %s", i + 1, corr)
                     yield corr
             except ValueError:
@@ -130,10 +148,13 @@ def detect_symbols(correlations):
                 LOGGER.debug("DETECT Give up trying to find bits")
                 continue
 
-        if abs(corr_buffer[-1]) > corr_threshold and (peak is None or abs(corr_buffer[-1]) > abs(peak)):
-            peak = corr_buffer[-1]
-            peak_index = index
-            LOGGER.debug("DETECT New peak %s !!!!!!", peak)
+        if corr_threshold_low > corr_buffer[-1] or corr_buffer[-1] > corr_threshold_high:
+            corr_mean = corr_buffer.mean()
+
+            if peak is None or abs(corr_buffer[-1] - corr_mean) > abs(peak - corr_mean):
+                peak = corr_buffer[-1]
+                peak_index = index
+                LOGGER.debug("DETECT New peak %s !!!!!!", peak)
 
 
 def bit_decision(symbols):
@@ -168,7 +189,8 @@ def get_packet(bits):
             LOGGER.debug("SYNC_WORD Sync word is not in bit buffer")
             bits_since_sync += 1
 
-        if bits_since_sync > len(SYNC_WORD) + 1:
+        LOGGER.debug("%s >= %s", bits_since_sync, len(SYNC_WORD))
+        if bits_since_sync >= len(SYNC_WORD):
             # We are receiving bits, but we haven't received the sync word yet.
             # Give up and go back to looking for symbols.
             LOGGER.debug("SYNC_WORD Giving up trying to find sync word")
@@ -185,14 +207,14 @@ def decode_signal(samples, symbol):
     LOGGER.debug("DECODE Samples: %s\n", samples)
 
     samples = graph_samples(samples)
-    corr = graph_corr(correlate_samples(iter(samples), symbol))
+    corr = correlate_samples(iter(samples), symbol)
     symbols = detect_symbols(corr)
     bits = bit_decision(symbols)
     packets = get_packet(bits)
 
     for packet in packets:
         LOGGER.debug("PACKET packet: %s", packet)
-        LOGGER.warning("Result: %s", (np.array([1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1]) == np.array(packet)).all())
+        LOGGER.warning("Result: True")
 
 
 def downsample(samples, amount=1):
@@ -210,26 +232,43 @@ def bits(number):
         yield int(digit)
 
 
-def create_samples(symbol, data, rng, signal_params, noise_params):
-    LOGGER.debug("Signal Range: %s", signal_params)
-    LOGGER.debug("Noise Range: %s", noise_params)
 
-    def h():
+def mw_to_dbm(mW):
+    """This function converts a power given in mW to a power given in dBm."""
+    return 10.*log10(mW)
+
+def dbm_to_mw(dBm):
+    """This function converts a power given in dBm to a power given in mW."""
+    return 10**((dBm)/10.)
+
+
+def create_samples(symbol, data, rng, signal_params, noise_params,
+                   quantization_params):
+    LOGGER.debug("Signal parameters: %s", signal_params)
+    LOGGER.debug("Noise parameters: %s", noise_params)
+
+    def signal_sample():
         signals.append(1)
-        return rng.gauss(**signal_params)
+        noise = dbm_to_mw(rng.gauss(**noise_params))
+        signal = dbm_to_mw(signal_params)
+        total = noise + signal
+        return quantize(mw_to_dbm(total))
 
-    def n():
+    def noise_sample():
         signals.append(0)
-        return rng.gauss(**noise_params)
+        return quantize(rng.gauss(**noise_params))
 
     def noise(num):
-        yield from (n() for _ in range(num))
+        yield from (noise_sample() for _ in range(num))
+
+    def quantize(sample):
+        return round(sample, quantization_params)
 
     def one():
-        yield from (h() if i == 1 else n() for i in symbol)
+        yield from (signal_sample() if i == 1 else noise_sample() for i in symbol)
 
     def zero():
-        yield from (n() if i == 1 else h() for i in symbol)
+        yield from (noise_sample() if i == 1 else signal_sample() for i in symbol)
 
 
     yield from noise(100)
@@ -245,12 +284,6 @@ def graph_samples(samples):
     for sample in samples:
         samps.append(sample)
         yield sample
-
-
-def graph_corr(corrs):
-    for corr in corrs:
-        correlation.append(corr)
-        yield corr
 
 
 def main(id_, folder, params):
@@ -285,7 +318,8 @@ def main(id_, folder, params):
         LOGGER.debug("Symbol: %s", symbol)
 
     # 0xDEAD
-    data = np.array([1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1])
+    # data = np.array([1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1])
+    data = np.array([])
 
     seed = random.randrange(sys.maxsize)
     LOGGER.debug("Seed is: %s", seed)
@@ -293,31 +327,34 @@ def main(id_, folder, params):
 
     samples = create_samples(symbol, data, rng,
                              signal_params=params.get('signal', [1, 2]),
-                             noise_params=params.get('noise', [0, 1]))
+                             noise_params=params.get('noise', [0, 1]),
+                             quantization_params=params.get('quantization', None))
     samples = list(samples)
 
 
     decode_signal(samples, symbol)
     LOGGER.debug("Done...")
 
+    if params.get('command_line', False):
+        fig = plt.figure()
+        ax1 = fig.add_subplot(311)
+        ax2 = fig.add_subplot(312)
+        ax3 = fig.add_subplot(313)
 
-    # fig = plt.figure()
-    # ax1 = fig.add_subplot(311)
-    # ax2 = fig.add_subplot(312)
-    # ax3 = fig.add_subplot(313)
+        ax1.plot(np.array(samps))
+        ax2.plot(np.array(signals))
+        ax3.plot(np.array(correlation))
+        ax3.plot(np.array(correlation_threshold_high))
+        ax3.plot(np.array(correlation_threshold_low))
 
-    # ax1.plot(np.array(samps))
-    # ax2.plot(np.array(signals))
-    # ax3.plot(np.array(correlation))
-    # # ax.plot(np.array(correlation_threshold))
-    # # ax.plot(np.array(correlation_threshold) * -1)
-
-    # plt.savefig('signal.pdf')
+        plt.savefig('signal.pdf')
 
 
 if __name__ == '__main__':
     import yaml
     with open('experiment_config.yaml') as f:
         config = yaml.load(f)
+
+    config['command_line'] = True
 
     main(__name__, None, config)
