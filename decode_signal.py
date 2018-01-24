@@ -16,7 +16,7 @@ from scipy import signal
 #                     format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
 LOGGER = None
 SYMBOL_SIZE = 15
-CORR_BUFFER_SIZE = SYMBOL_SIZE * 5
+CORR_BUFFER_SIZE = 75
 CORR_STD_FACTOR = 3
 SYNC_WORD = np.array([1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 0])
 SYNC_WORD_FUZZ = 3
@@ -336,18 +336,21 @@ def main(id_, folder, params):
     LOGGER.debug("Done...")
 
     if params.get('command_line', False):
-        fig = plt.figure()
-        ax1 = fig.add_subplot(311)
-        ax2 = fig.add_subplot(312)
-        ax3 = fig.add_subplot(313)
-
-        ax1.plot(np.array(samps))
-        ax2.plot(np.array(signals))
-        ax3.plot(np.array(correlation))
-        ax3.plot(np.array(correlation_threshold_high))
-        ax3.plot(np.array(correlation_threshold_low))
-
+        fig = plt.figure(figsize=(8,3))
+        ax1 = fig.add_subplot(111)
+        ax1.plot(np.linspace(0, len(samps) * 0.456, len(samps)), np.array(samps))
+        ax1.set_xlabel("Time (ms)")
+        ax1.set_ylabel("Signal (dBm)")
+        plt.tight_layout()
         plt.savefig('signal.pdf')
+
+        fig = plt.figure(figsize=(8,3))
+        ax3 = fig.add_subplot(111)
+        ax3.plot(np.linspace(0, len(correlation) * 0.456, len(correlation)), np.array(correlation))
+        ax3.set_xlabel("Time (ms)")
+        ax3.set_ylabel("Cross-correlation")
+        plt.tight_layout()
+        plt.savefig('corr.pdf')
 
 
 if __name__ == '__main__':
