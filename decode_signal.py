@@ -11,6 +11,7 @@ matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import signal
+import scipy.io as sio
 
 # logging.basicConfig(level=logging.DEBUG,
 #                     format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
@@ -286,7 +287,32 @@ def graph_samples(samples):
         yield sample
 
 
-def main(id_, folder, params):
+def load_data(file_name):
+    try:
+        with open('{}.npy'.format(file_name), 'rb') as f:
+           return np.load(f)
+    except FileNotFoundError:
+        data = sio.loadmat(file_name)
+        data = data['Y']
+        data = np.array([d[0] for d in data])
+
+        with open('{}.npy'.format(file_name), 'wb') as f:
+           np.save(f, data)
+
+        return data
+
+
+def get_samples_from_file(file_name):
+    data = load_data(file_name)
+    chunk_size = 100_000
+
+    data = data[:len(data) - (len(data) % chunk_size)]
+    power_data = np.abs(data) ** 2  # Get magnitude and convert to power
+
+    return power_data
+
+
+def main(id_, folder, params, sample_file=None):
     # Set up logging
     global LOGGER
     LOGGER = logging.getLogger("{}".format(id_))
@@ -321,43 +347,70 @@ def main(id_, folder, params):
     # data = np.array([1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1])
     data = np.array([])
 
-    seed = random.randrange(sys.maxsize)
-    LOGGER.debug("Seed is: %s", seed)
-    rng = random.Random(seed)
 
-    samples = create_samples(symbol, data, rng,
-                             signal_params=params.get('signal', [1, 2]),
-                             noise_params=params.get('noise', [0, 1]),
-                             quantization_params=params.get('quantization', None))
-    samples = list(samples)
+    if sample_file is None:
+        seed = random.randrange(sys.maxsize)
+        LOGGER.debug("Seed is: %s", seed)
+        rng = random.Random(seed)
 
+        samples = create_samples(symbol, data, rng,
+                                 signal_params=params.get('signal', [1, 2]),
+                                 noise_params=params.get('noise', [0, 1]),
+                                 quantization_params=params.get('quantization', None))
+        samples = list(samples)
+    else:
+        samples = get_samples_from_file(sample_file)
+        samples[np.where(samples < .0000001)] = np.nan
+        samples = 10.*np.log10(samples)
 
-    decode_signal(samples, symbol)
+        # TODO: Fix this
+        samples = samples[int(.7e7):int(1.05e7)]
+
+    # decode_signal(samples, symbol)
     LOGGER.debug("Done...")
 
     if params.get('command_line', False):
+        pass
         fig = plt.figure(figsize=(8,3))
         ax1 = fig.add_subplot(111)
-        ax1.plot(np.linspace(0, len(samps) * 0.456, len(samps)), np.array(samps))
-        ax1.set_xlabel("Time (ms)")
-        ax1.set_ylabel("Signal (dBm)")
-        plt.tight_layout()
-        plt.savefig('signal.pdf')
+        # # ax1.plot(np.linspace(0, len(samps) * 0.456, len(samps)), np.array(samps))
+        # ax1.plot(np.array(samps))
 
-        fig = plt.figure(figsize=(8,3))
-        ax3 = fig.add_subplot(111)
-        ax3.plot(np.linspace(0, len(correlation) * 0.456, len(correlation)), np.array(correlation))
-        ax3.set_xlabel("Time (ms)")
-        ax3.set_ylabel("Cross-correlation")
-        plt.tight_layout()
-        plt.savefig('corr.pdf')
+
+        ax1.plot(np.linspace(0, len(samples) * 50e-9, len(samples)),
+                 samples)
+
+        # ax1.set_xlabel("Time (ms)")
+        # ax1.set_ylabel("Signal (dBm)")
+        # plt.tight_layout()
+        plt.savefig('signal.png')
+
+        # fig = plt.figure(figsize=(8,3))
+        # ax3 = fig.add_subplot(111)
+        # # ax3.plot(np.linspace(0, len(correlation) * 0.456, len(correlation)), np.array(correlation))
+        # ax3.plot(np.array(correlation))
+        # # ax3.set_xlabel("Time (ms)")
+        # # ax3.set_ylabel("Cross-correlation")
+        # # plt.tight_layout()
+        # plt.savefig('corr.pdf')
 
 
 if __name__ == '__main__':
+    import click
     import yaml
-    with open('experiment_config.yaml') as f:
-        config = yaml.load(f)
 
-    config['command_line'] = True
+    @click.command()
+    @click.argument('config_file', type=click.File('r'))
+    @click.option('--sample_file', default=None)
+    def cli(config_file, sample_file):
+        config = yaml.load(config_file)
+        config['command_line'] = True
 
-    main(__name__, None, config)
+        main(__name__, None, config, sample_file=sample_file)
+
+
+    cli()
+
+
+
+
