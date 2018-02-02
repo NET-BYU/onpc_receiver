@@ -16,11 +16,8 @@ import scipy.io as sio
 # logging.basicConfig(level=logging.DEBUG,
 #                     format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
 LOGGER = None
-SYMBOL_SIZE = 15
 CORR_BUFFER_SIZE = 75
 CORR_STD_FACTOR = 3
-SYNC_WORD = np.array([1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 0])
-SYNC_WORD_FUZZ = 3
 DATA_SIZE = 0
 
 signals = []
@@ -40,7 +37,7 @@ def correlate_samples(samples, symbol):
     """Multiples a buffer of samples by a symbol"""
 
     # Create buffer
-    sample_buffer = np.zeros(SYMBOL_SIZE)
+    sample_buffer = np.zeros(len(symbol))
 
     # Build up buffer with samples until it is not empty
     for i in range(len(sample_buffer) - 1):
@@ -61,7 +58,7 @@ def correlate_samples(samples, symbol):
         yield result
 
 
-def detect_symbols(correlations):
+def detect_symbols(correlations, symbol_size, sync_word_size):
     """Detects if a correlation is greater than some threshold"""
 
     index = 0
@@ -102,7 +99,7 @@ def detect_symbols(correlations):
         # bits.append(None)
 
         # Only if the peak is maintained for a whole symbol size will it be considered a symbol
-        if peak_index is not None and index >= (peak_index + SYMBOL_SIZE - 1):
+        if peak_index is not None and index >= (peak_index + symbol_size - 1):
             LOGGER.debug("DETECT Found a bit: %s !!!!!!!!!!", peak)
             yield peak
             peak = None
@@ -110,7 +107,7 @@ def detect_symbols(correlations):
 
             LOGGER.debug("DETECT Looking for 2 bit of sync word")
 
-            # Since we have already looked ahead a whole SYMBOL_SIZE, the next
+            # Since we have already looked ahead a whole symbol_size, the next
             # correlation should be our symbol.
             corr = next(correlations)
             index += 1
@@ -121,9 +118,9 @@ def detect_symbols(correlations):
             yield corr
 
             try:
-                for i in range(len(SYNC_WORD) - 2):
+                for i in range(sync_word_size - 2):
                     LOGGER.debug("DETECT Looking for %s bit of sync word", i + 2)
-                    for _ in range(SYMBOL_SIZE):
+                    for _ in range(symbol_size):
                         corr = next(correlations)
                         index += 1
                         correlation.append(corr)
@@ -135,7 +132,7 @@ def detect_symbols(correlations):
                 # Found the sync word, keep going!
                 for i in range(DATA_SIZE):
                     LOGGER.debug("DETECT Looking for %s bit of data", i + 1)
-                    for _ in range(SYMBOL_SIZE):
+                    for _ in range(symbol_size):
                         corr = next(correlations)
                         index += 1
                         correlation.append(corr)
@@ -171,8 +168,8 @@ def bit_decision(symbols):
             symbols.throw(e)
 
 
-def get_packet(bits):
-    bit_buffer = np.ones(len(SYNC_WORD), dtype=np.int64) * -1
+def get_packet(bits, sync_word, fuzz):
+    bit_buffer = np.ones(len(sync_word), dtype=np.int64) * -1
     bits_since_sync = 0
 
     for bit in bits:
@@ -181,8 +178,8 @@ def get_packet(bits):
 
         LOGGER.debug("SYNC_WORD new bit: %s\n\n", bit_buffer)
 
-        LOGGER.debug("SYNC_WORD %s =? %s", SYNC_WORD[SYNC_WORD_FUZZ:], bit_buffer[SYNC_WORD_FUZZ:])
-        if (SYNC_WORD[SYNC_WORD_FUZZ:] == bit_buffer[SYNC_WORD_FUZZ:]).all():
+        LOGGER.debug("SYNC_WORD %s =? %s", sync_word[fuzz:], bit_buffer[fuzz:])
+        if (sync_word[fuzz:] == bit_buffer[fuzz:]).all():
             LOGGER.debug("SYNC_WORD Found sync word in bit buffer!!!!!")
             yield [next(bits) for _ in range(DATA_SIZE)]
             bits_since_sync = 0
@@ -190,8 +187,8 @@ def get_packet(bits):
             LOGGER.debug("SYNC_WORD Sync word is not in bit buffer")
             bits_since_sync += 1
 
-        LOGGER.debug("%s >= %s", bits_since_sync, len(SYNC_WORD))
-        if bits_since_sync >= len(SYNC_WORD):
+        LOGGER.debug("%s >= %s", bits_since_sync, len(sync_word))
+        if bits_since_sync >= len(sync_word):
             # We are receiving bits, but we haven't received the sync word yet.
             # Give up and go back to looking for symbols.
             LOGGER.debug("SYNC_WORD Giving up trying to find sync word")
@@ -199,19 +196,15 @@ def get_packet(bits):
             bits.throw(ValueError)
 
 
-def decode_signal(samples, symbol):
-    if len(symbol) != SYMBOL_SIZE:
-        print("Symbol is wrong size! {} != {}".format(len(symbol), SYMBOL_SIZE))
-        exit()
-
-    samples = list(samples)
-    LOGGER.debug("DECODE Samples: %s\n", samples)
+def decode_signal(samples, symbol, sync_word, sync_word_fuzz):
+    # samples = list(samples)
+    # LOGGER.debug("DECODE Samples: %s\n", samples)
 
     samples = graph_samples(samples)
     corr = correlate_samples(iter(samples), symbol)
-    symbols = detect_symbols(corr)
+    symbols = detect_symbols(corr, len(symbol), len(sync_word))
     bits = bit_decision(symbols)
-    packets = get_packet(bits)
+    packets = get_packet(bits, sync_word, sync_word_fuzz)
 
     for packet in packets:
         LOGGER.debug("PACKET packet: %s", packet)
@@ -243,8 +236,8 @@ def dbm_to_mw(dBm):
     return 10**((dBm)/10.)
 
 
-def create_samples(symbol, data, rng, signal_params, noise_params,
-                   quantization_params):
+def create_samples(symbol, sync_word, data, rng, signal_params,
+                   noise_params, quantization_params):
     LOGGER.debug("Signal parameters: %s", signal_params)
     LOGGER.debug("Noise parameters: %s", noise_params)
 
@@ -273,7 +266,7 @@ def create_samples(symbol, data, rng, signal_params, noise_params,
 
 
     yield from noise(100)
-    for bit in chain(SYNC_WORD, data):
+    for bit in chain(sync_word, data):
         if bit:
             yield from one()
         else:
@@ -334,14 +327,19 @@ def main(id_, folder, params, sample_file=None):
     else:
         LOGGER.setLevel(logging.WARN)
 
+    # Take care of symbol generation
     if 'max_len_seq' in params:
-        global SYMBOL_SIZE
-        # Set up symbol
         LOGGER.debug("Max Length Sequence: %s", params['max_len_seq'])
-        SYMBOL_SIZE = 2 ** params['max_len_seq'] - 1
         symbol, state = signal.max_len_seq(params['max_len_seq'])
         symbol = symbol * 2 - 1
-        LOGGER.debug("Symbol: %s", symbol)
+    elif 'symbol' in params:
+        symbol = np.array(params['symbol'])
+    LOGGER.debug("Symbol: %s", symbol)
+
+
+    # Take care of sync word
+    sync_word = np.array(params.get('sync_word', [1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 0]))
+    sync_word_fuzz = params.get('sync_word_fuzz', 3)
 
     # 0xDEAD
     # data = np.array([1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1])
@@ -353,46 +351,39 @@ def main(id_, folder, params, sample_file=None):
         LOGGER.debug("Seed is: %s", seed)
         rng = random.Random(seed)
 
-        samples = create_samples(symbol, data, rng,
-                                 signal_params=params.get('signal', [1, 2]),
-                                 noise_params=params.get('noise', [0, 1]),
+        samples = create_samples(symbol, sync_word, data, rng,
+                                 signal_params=params['signal'],
+                                 noise_params=params['noise'],
                                  quantization_params=params.get('quantization', None))
         samples = list(samples)
     else:
         samples = get_samples_from_file(sample_file)
-        samples[np.where(samples < .0000001)] = np.nan
+        # samples[np.where(samples < .0000001)] = np.nan
+        samples += .0000000000000001
         samples = 10.*np.log10(samples)
 
         # TODO: Fix this
         samples = samples[int(.7e7):int(1.05e7)]
 
-    # decode_signal(samples, symbol)
+
+    decode_signal(samples, symbol, sync_word, sync_word_fuzz)
     LOGGER.debug("Done...")
+
+
 
     if params.get('command_line', False):
         pass
         fig = plt.figure(figsize=(8,3))
         ax1 = fig.add_subplot(111)
-        # # ax1.plot(np.linspace(0, len(samps) * 0.456, len(samps)), np.array(samps))
-        # ax1.plot(np.array(samps))
-
-
-        ax1.plot(np.linspace(0, len(samples) * 50e-9, len(samples)),
-                 samples)
-
-        # ax1.set_xlabel("Time (ms)")
-        # ax1.set_ylabel("Signal (dBm)")
-        # plt.tight_layout()
+        ax1.plot(np.array(samps))
+        plt.tight_layout()
         plt.savefig('signal.png')
 
-        # fig = plt.figure(figsize=(8,3))
-        # ax3 = fig.add_subplot(111)
-        # # ax3.plot(np.linspace(0, len(correlation) * 0.456, len(correlation)), np.array(correlation))
-        # ax3.plot(np.array(correlation))
-        # # ax3.set_xlabel("Time (ms)")
-        # # ax3.set_ylabel("Cross-correlation")
-        # # plt.tight_layout()
-        # plt.savefig('corr.pdf')
+        fig = plt.figure(figsize=(8,3))
+        ax3 = fig.add_subplot(111)
+        ax3.plot(np.array(correlation))
+        plt.tight_layout()
+        plt.savefig('corr.pdf')
 
 
 if __name__ == '__main__':
@@ -406,7 +397,7 @@ if __name__ == '__main__':
         config = yaml.load(config_file)
         config['command_line'] = True
 
-        main(__name__, None, config, sample_file=sample_file)
+        main(id_=__name__, folder=None, params=config, sample_file=sample_file)
 
 
     cli()
