@@ -1,18 +1,8 @@
-# # max_len_seq: 11
-# max_len_seq: 12
+max_len_seq: 12
+# symbol: [1, -1, -1, 1]
 
-# noise:
-#   mu: -90
-#   sigma: 5.3322
-
-# signal: -100
-
-# quantization: 0
-
-# logging_output: no
-
-
-max_len_seq: 6
+# sync_word: [1, 1, 0, 0]
+# sync_word_fuzz: 0
 
 noise:
   mu: -90
