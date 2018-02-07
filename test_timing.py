@@ -12,8 +12,12 @@ from scipy import stats
 
 
 def load_data(file_name):
+    if file_name[-3:] == 'npy':
+        with open(file_name, 'rb') as f:
+           return np.load(f)
+
     try:
-        with open('{}.npy'.format(file_name), 'rb') as f:
+        with open('{}.npy'.format(file_name[:-3]), 'rb') as f:
            return np.load(f)
     except FileNotFoundError:
         data = sio.loadmat(file_name)
@@ -28,7 +32,7 @@ def load_data(file_name):
                 key = ''
             new_data.append(np.array([d[0] for d in data['Y{}'.format(key)]]))
 
-        with open('{}.npy'.format(file_name), 'wb') as f:
+        with open('{}.npy'.format(file_name[:-3]), 'wb') as f:
            np.save(f, new_data)
 
         return new_data
@@ -116,6 +120,8 @@ def test_timing(sample_file, graph):
             plt.tight_layout()
             plt.savefig(sample_file + '-{}.png'.format(file_index))
 
+        plt.close()
+
         all_data.append({"tx_durations": np.array(tx_durations),
                          "noise_durations": np.array(noise_durations),
                          "file": sample_file,
@@ -125,40 +131,54 @@ def test_timing(sample_file, graph):
 
 
 def process_result(data):
-    return (int(Path(data['file']).stem.split('-')[-1]),
-            data['tx_durations'].std(),
-            data['noise_durations'].std())
+    # The data coming in is in terms of samples
+    # The spectrum analyzer samples at 50 MHz which is
+    # once every 20 ns.
 
+    path = Path(data['file'])
+
+    return (path.stem.split('-')[-2],
+            int(path.stem.split('-')[-1]),
+            (data['tx_durations'] * .02).std(),  # Convert to μs
+            (data['noise_durations'] * .02).std())  # Convert to μs
+
+
+def get_device_type(data):
+    return
 
 
 def main(sample_files, graph):
     processes = min(len(sample_files), 4)
+
     with multiprocessing.Pool(processes=processes) as pool:
         data = pool.starmap(test_timing,
                             [(sample_file, graph)
                              for sample_file in sample_files])
+
     data = itertools.chain(*data)
     data = (process_result(d) for d in data)
 
-    pause_times, tx_std, noise_std = map(np.array, zip(*data))
+    for device_type, d in itertools.groupby(data, lambda x: x[0]):
+        _, pause_times, tx_std, noise_std = map(np.array, zip(*d))
 
-    print(pause_times)
-    print(tx_std)
-    print(noise_std)
+        print(device_type)
+        print(pause_times)
+        print(tx_std)
+        print(noise_std)
 
-    fig = plt.figure(figsize=(8,4))
-    ax1 = fig.add_subplot(211)
-    ax1.scatter(pause_times, tx_std, marker='x')
-    ax1.set_ylabel('TX Time Std')
+        fig = plt.figure(figsize=(8,4))
+        ax1 = fig.add_subplot(211)
+        ax1.scatter(pause_times, tx_std, marker='x')
+        ax1.set_ylabel('TX Time Std (μs)')
 
-    ax2 = fig.add_subplot(212)
-    ax2.scatter(pause_times, noise_std, marker='x')
-    ax2.set_ylabel('Noise Time Std')
+        ax2 = fig.add_subplot(212)
+        ax2.scatter(pause_times, noise_std, marker='x')
+        ax2.set_ylabel('Noise Time Std (μs)')
 
-    ax2.set_xlabel('Pause Time (μs)')
+        ax2.set_xlabel('Pause Time (μs)')
 
-    plt.tight_layout()
-    plt.savefig('result.pdf')
+        plt.tight_layout()
+        plt.savefig('timing-results-{}.pdf'.format(device_type))
 
 
 
