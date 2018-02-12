@@ -3,6 +3,7 @@ import itertools
 import multiprocessing
 from pathlib import Path
 
+import click
 import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
@@ -44,127 +45,107 @@ def get_samples_from_file(file_name):
         yield power_data
 
 
-def test_timing(sample_file, graph):
-    all_data = []
-    for file_index, data in enumerate(get_samples_from_file(sample_file)):
-        print("Processing {} - {}".format(sample_file, file_index))
+def find_transmissions(samples):
+    transmissions = []
 
-        median = np.median(data)
-        std = np.std(data)
-        threshold = median + std
+    median = np.median(samples)
+    std = np.std(samples)
+    threshold = median + std
 
-        above = data > threshold
-        above_iter = iter(above)
+    above = samples > threshold
+    above_iter = iter(above)
 
-        WINDOW = 100
-        index = 0
-        peaks = []
+    WINDOW = 100
+    index = 0
 
-        fig = plt.figure(figsize=(8,6))
-        ax1 = fig.add_subplot(411)
-        ax1.plot(data, '.')
-        ax1.axhline(y=threshold, color='red')
+    # Find all transmissions
+    while True:
+        try:
+            # Progress to True value (start of signal)
+            value = False
+            while not value:
+                value = next(above_iter)
+                index += 1
 
-        ax2 = fig.add_subplot(412)
-        ax2.plot(above, '.')
+            start = index
 
+            # Progress until there are no True values for WINDOW samples (end of signal)
+            buffer = deque([value], maxlen=WINDOW)
+            while any(buffer) is not False:
+                buffer.append(next(above_iter))
+                index += 1
 
-        # Find all peaks
-        while True:
-            try:
-                # Progress to True value (start of signal)
-                value = False
-                while not value:
-                    value = next(above_iter)
-                    index += 1
+            end = index - WINDOW
 
-                start = index
-                ax2.axvline(x=index, color='red')
+            transmissions.append((start, end))
+        except StopIteration:
+            break
 
-                # Progress until there are no True values for WINDOW samples (end of signal)
+    # Remove first transmission in case we caught a middle of a transmission
+    transmissions.pop(0)
 
-                buffer = deque([value], maxlen=WINDOW)
-                while any(buffer) is not False:
-                    buffer.append(next(above_iter))
-                    index += 1
-
-                # TODO: What about the WINDOW values we jumped ahead?
-                end = index - WINDOW
-                ax2.axvline(x=index - WINDOW, color='red')
-
-                peaks.append((start, end))
-            except StopIteration:
-                break
-
-        # Analyze peaks
-        tx_durations = []
-        noise_durations = []
-
-        for start, end in peaks:
-            tx_durations.append(end - start)
-
-        starts, ends = zip(*peaks)
-        for start, end in zip(ends, starts[1:]):
-            noise_durations.append(end - start)
-
-        # Remove first TX in case we caught a middle of a TX
-        tx_durations.pop(0)
-
-        ax3 = fig.add_subplot(413)
-        ax3.plot(tx_durations, '.')
-
-        ax3 = fig.add_subplot(414)
-        ax3.plot(noise_durations, '.')
-
-        if graph:
-            plt.tight_layout()
-            plt.savefig(sample_file + '-{}.png'.format(file_index))
-
-        plt.close()
-
-        all_data.append({"tx_durations": np.array(tx_durations),
-                         "noise_durations": np.array(noise_durations),
-                         "file": sample_file,
-                         "index": file_index})
-
-    return all_data
+    return transmissions
 
 
-def process_result(data):
+def find_transmit_pause_times(transmissions, sample_file, index):
+    # Find difference between start and end of transmission
+    # (transmission duration)
+    tx_durations = np.array([end - start for start, end in transmissions])
+
+    # Find difference between end of transmission and start of another transmission
+    # (pause duration)
+    starts, ends = zip(*transmissions)
+    pause_durations = np.array([end - start for start, end in zip(ends, starts[1:])])
+
     # The data coming in is in terms of samples
     # The spectrum analyzer samples at 50 MHz which is
     # once every 20 ns.
+    tx_durations = tx_durations * .02        # Convert to μs
+    pause_durations = pause_durations * .02  # Convert to μs
 
-    path = Path(data['file'])
+    # Get metadata
+    sample_file = Path(sample_file)
+    device = sample_file.stem.split('-')[-2]
+    pause_duration = int(sample_file.stem.split('-')[-1])
 
-    return (path.stem.split('-')[-2],
-            int(path.stem.split('-')[-1]),
-            (data['tx_durations'] * .02).std(),  # Convert to μs
-            (data['noise_durations'] * .02).std())  # Convert to μs
-
-
-def get_device_type(data):
-    return
+    return device, pause_duration, tx_durations.std(), pause_durations.std()
 
 
-def main(sample_files, graph):
-    processes = min(len(sample_files), 4)
+def run(samples, sample_file, index, cb):
+    print("Processing {} - {}".format(sample_file, index))
+    transmissions = find_transmissions(samples)
+    return cb(transmissions, sample_file, index)
 
+
+def process_data(sample_files, cb):
+    def inputs():
+        for sample_file in sample_files:
+            for i, samples in enumerate(get_samples_from_file(sample_file)):
+                yield samples, sample_file, i, cb
+
+    processes = 8
     with multiprocessing.Pool(processes=processes) as pool:
-        data = pool.starmap(test_timing,
-                            [(sample_file, graph)
-                             for sample_file in sample_files])
+        return pool.starmap(run, inputs(), chunksize=10)
 
-    data = itertools.chain(*data)
-    data = (process_result(d) for d in data)
+
+@click.group()
+def cli():
+    pass
+
+
+@cli.command()
+@click.argument('sample_files', nargs=-1)
+@click.option('--graph/--no-graph', default=False)
+def transmit_pause(sample_files, graph):
+    data = process_data(sample_files, find_transmit_pause_times)
 
     for device_type, d in itertools.groupby(data, lambda x: x[0]):
-        _, pause_times, tx_std, noise_std = map(np.array, zip(*d))
+        _, pause_times, tx_std, pause_std = map(np.array, zip(*d))
 
         print(device_type)
         print(pause_times)
         print(tx_std)
-        print(noise_std)
+        print(pause_std)
 
         fig = plt.figure(figsize=(8,4))
         ax1 = fig.add_subplot(211)
@@ -172,8 +153,8 @@ def main(sample_files, graph):
         ax1.set_ylabel('TX Time Std (μs)')
 
         ax2 = fig.add_subplot(212)
-        ax2.scatter(pause_times, noise_std, marker='x')
-        ax2.set_ylabel('Noise Time Std (μs)')
+        ax2.scatter(pause_times, pause_std, marker='x')
+        ax2.set_ylabel('Pause Time Std (μs)')
 
         ax2.set_xlabel('Pause Time (μs)')
 
@@ -181,17 +162,26 @@ def main(sample_files, graph):
         plt.savefig('timing-results-{}.pdf'.format(device_type))
 
 
+@cli.command()
+@click.argument('sample_files', nargs=-1)
+@click.argument('period_time')
+@click.option('--graph/--no-graph', default=False)
+def transmit_period(sample_files, period_time, graph):
+    all_data = []
+    for sample_file in sample_files:
+        for i, samples in enumerate(get_samples_from_file(sample_file)):
+            print("Processing {} - {}".format(sample_file, i))
+            transmissions = find_transmissions(samples)
+            all_data.append(find_transmit_pause_times(transmissions))
+
+            if graph:
+                # TODO: Do all graphing here!!!!
+                pass
+
+
+    print(list(all_data))
+
 
 
 if __name__ == '__main__':
-    import click
-    import yaml
-
-    @click.command()
-    @click.argument('sample_files', nargs=-1)
-    @click.option('--graph/--no-graph', default=False)
-    def cli(sample_files, graph):
-        main(sample_files, graph)
-
-
     cli()
