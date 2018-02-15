@@ -1,4 +1,5 @@
 from collections import deque
+import functools
 import itertools
 import multiprocessing
 from pathlib import Path
@@ -87,6 +88,23 @@ def find_transmissions(samples):
     return transmissions
 
 
+def run(samples, sample_file, index, cb):
+    print("Processing {} - {}".format(sample_file, index))
+    transmissions = find_transmissions(samples)
+    return cb(transmissions, sample_file, index)
+
+
+def process_data(sample_files, cb):
+    def inputs():
+        for sample_file in sample_files:
+            for i, samples in enumerate(get_samples_from_file(sample_file)):
+                yield samples, sample_file, i, cb
+
+    processes = 8
+    with multiprocessing.Pool(processes=processes) as pool:
+        return pool.starmap(run, inputs())
+
+
 def find_transmit_pause_times(transmissions, sample_file, index):
     # Find difference between start and end of transmission
     # (transmission duration)
@@ -111,21 +129,35 @@ def find_transmit_pause_times(transmissions, sample_file, index):
     return device, pause_duration, tx_durations.std(), pause_durations.std()
 
 
-def run(samples, sample_file, index, cb):
-    print("Processing {} - {}".format(sample_file, index))
-    transmissions = find_transmissions(samples)
-    return cb(transmissions, sample_file, index)
+def find_transmit_period(transmissions, sample_file, index, period):
+    starts = np.array([start for start, _ in transmissions])
+    starts -= starts[0]  # Make zero relative to first element
 
+    # The data coming in is in terms of samples
+    # The spectrum analyzer samples at 50 MHz which is
+    # once every 20 ns.
+    starts = starts * .02  # Convert to μs
+    # print(starts)
 
-def process_data(sample_files, cb):
-    def inputs():
-        for sample_file in sample_files:
-            for i, samples in enumerate(get_samples_from_file(sample_file)):
-                yield samples, sample_file, i, cb
+    # Convert from μs to periods
+    periods = starts / period
+    # print(periods)
 
-    processes = 8
-    with multiprocessing.Pool(processes=processes) as pool:
-        return pool.starmap(run, inputs(), chunksize=10)
+    # Calculate how many missed periods there are
+    missing = sorted(set(np.arange(len(periods))) - set(np.around(periods)))
+
+    # Calculate offset
+    offsets = periods - np.around(periods)
+    offsets *= period  # Convert from periods into μs
+    offsets = offsets[1:]  # Remove first value because it is always zero
+    # print(offsets)
+
+    # Get metadata
+    sample_file = Path(sample_file)
+    device = sample_file.stem.split('-')[-2]
+    pause_duration = int(sample_file.stem.split('-')[-1])
+
+    return sample_file, device, pause_duration, missing, offsets
 
 
 @click.group()
@@ -164,15 +196,73 @@ def transmit_pause(sample_files, graph):
 
 @cli.command()
 @click.argument('sample_files', nargs=-1)
-@click.argument('period_time')
+@click.argument('period_time', type=click.INT)
 @click.option('--graph/--no-graph', default=False)
 def transmit_period(sample_files, period_time, graph):
-    all_data = []
-    for sample_file in sample_files:
-        for i, samples in enumerate(get_samples_from_file(sample_file)):
-            print("Processing {} - {}".format(sample_file, i))
-            transmissions = find_transmissions(samples)
-            all_data.append(find_transmit_pause_times(transmissions))
+    data = process_data(sample_files,
+                        functools.partial(find_transmit_period,
+                                          period=period_time))
+
+    all_missing = [len(d[3]) for d in data]
+    all_offsets = [d[4] for d in data]
+    std_dev = np.concatenate(all_offsets).std()
+    mean = np.concatenate(all_offsets).mean()
+
+    print(f"Total missing: {sum(all_missing)} ({all_missing})")
+    print(f"Std: {std_dev}")
+
+    fig = plt.figure(figsize=(8,4))
+    ax = fig.add_subplot(111)
+
+    ax.plot(np.concatenate(all_offsets), '.')
+    ax.axhline(y=mean + std_dev, color='r')
+    ax.axhline(y=mean - std_dev, color='r')
+
+    ax.set_ylabel('Offset from Transmission Period (μs)')
+    ax.set_xlabel('Transmission Number')
+
+    plt.tight_layout()
+    plt.savefig(f'offsets_transmission-{period_time}.pdf')
+    plt.close(fig)
+
+    #####################################################
+
+    fig = plt.figure(figsize=(8,4))
+    ax = fig.add_subplot(111)
+    ax.boxplot(all_offsets)
+
+    ax.set_ylabel('Offset from Transmission Period (μs)')
+    ax.set_xlabel('Experiment Number')
+
+    plt.tight_layout()
+    plt.savefig(f'offsets_experiments-{period_time}.pdf')
+    plt.close(fig)
+
+    #####################################################
+
+    fig = plt.figure(figsize=(8,4))
+    ax = fig.add_subplot(111)
+    n, bins, patches = ax.hist(np.concatenate(all_offsets),
+                               bins=100,
+                               normed=1,
+                               histtype='step',
+                               cumulative=True)
+    ax.axvline(x=mean + std_dev, color='r')
+    ax.axvline(x=mean - std_dev, color='r')
+
+    ax.set_ylabel('Probability')
+    ax.set_xlabel('Offset from Transmission Period (μs)')
+
+    plt.tight_layout()
+    plt.savefig(f'offsets_cdf-{period_time}.pdf')
+    plt.close(fig)
+
+    # for name, device_type, pause_time, missing, offsets in data:
+    #     print(name)
+    #     print(offsets)
+
+
+
 
             if graph:
                 # TODO: Do all graphing here!!!!
