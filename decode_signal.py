@@ -10,6 +10,7 @@ import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import numpy as np
+from pint import UnitRegistry
 from scipy import signal
 import scipy.io as sio
 
@@ -28,9 +29,11 @@ correlation_threshold_high = []
 correlation_threshold_low = []
 bits = []
 
+ureg = UnitRegistry()
+
 # Time:
 # old                now
-# <------------------->
+# <-------------------|
 
 
 def correlate_samples(samples, symbol):
@@ -281,26 +284,48 @@ def graph_samples(samples):
 
 
 def load_data(file_name):
+    if file_name[-3:] == 'npy':
+        with open(file_name, 'rb') as f:
+           return np.load(f)
+
     try:
-        with open('{}.npy'.format(file_name), 'rb') as f:
+        with open('{}.npy'.format(file_name[:-3]), 'rb') as f:
            return np.load(f)
     except FileNotFoundError:
         data = sio.loadmat(file_name)
-        data = data['Y']
-        data = np.array([d[0] for d in data])
+        new_data = []
 
-        with open('{}.npy'.format(file_name), 'wb') as f:
-           np.save(f, data)
+        keys = (key[1:] for key in data if key[0] == 'Y')
+        keys = (0 if key == '' else int(key) for key in keys)
+        keys = sorted(keys)
 
-        return data
+        for key in keys:
+            if key == 0:
+                key = ''
+            new_data.append(np.array([d[0] for d in data['Y{}'.format(key)]]))
+
+        with open('{}.npy'.format(file_name[:-3]), 'wb') as f:
+           np.save(f, new_data)
+
+        return new_data
 
 
-def get_samples_from_file(file_name):
+def get_samples_from_file(file_name, src_rate, dst_rate):
     data = load_data(file_name)
-    chunk_size = 100_000
 
-    data = data[:len(data) - (len(data) % chunk_size)]
+    if len(data) > 1:
+        print("WARNING: File contains multiple captures. Selecting the first one.\n")
+        data = data[0]
+
     power_data = np.abs(data) ** 2  # Get magnitude and convert to power
+    factor = int(round((src_rate / dst_rate).to_base_units()))
+
+    # Downsample source to destination
+    power_data =  np.array([power_data[i:i+factor].mean()
+                            for i in range(0, len(power_data), factor)])
+
+    # Convert to dBm
+    power_data = 10.*np.log10(power_data)
 
     return power_data
 
@@ -345,7 +370,6 @@ def main(id_, folder, params, sample_file=None):
     # data = np.array([1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1])
     data = np.array([])
 
-
     if sample_file is None:
         seed = random.randrange(sys.maxsize)
         LOGGER.debug("Seed is: %s", seed)
@@ -357,33 +381,30 @@ def main(id_, folder, params, sample_file=None):
                                  quantization_params=params.get('quantization', None))
         samples = list(samples)
     else:
-        samples = get_samples_from_file(sample_file)
-        # samples[np.where(samples < .0000001)] = np.nan
-        samples += .0000000000000001
-        samples = 10.*np.log10(samples)
+        # Resolve source and destination sample rates
+        source_sample_rate = ureg(params['source_sample_rate'])
+        destination_sample_rate = ureg(params['destination_sample_rate'])
 
-        # TODO: Fix this
-        samples = samples[int(.7e7):int(1.05e7)]
+        samples = get_samples_from_file(sample_file,
+                                        source_sample_rate,
+                                        destination_sample_rate)
 
+    # decode_signal(samples, symbol, sync_word, sync_word_fuzz)
+    # LOGGER.debug("Done...")
 
-    decode_signal(samples, symbol, sync_word, sync_word_fuzz)
-    LOGGER.debug("Done...")
+    # if params.get('command_line', False):
+    #     pass
+    #     fig = plt.figure(figsize=(8,3))
+    #     ax1 = fig.add_subplot(111)
+    #     ax1.plot(np.array(samps))
+    #     plt.tight_layout()
+    #     plt.savefig('signal.png')
 
-
-
-    if params.get('command_line', False):
-        pass
-        fig = plt.figure(figsize=(8,3))
-        ax1 = fig.add_subplot(111)
-        ax1.plot(np.array(samps))
-        plt.tight_layout()
-        plt.savefig('signal.png')
-
-        fig = plt.figure(figsize=(8,3))
-        ax3 = fig.add_subplot(111)
-        ax3.plot(np.array(correlation))
-        plt.tight_layout()
-        plt.savefig('corr.pdf')
+    #     fig = plt.figure(figsize=(8,3))
+    #     ax3 = fig.add_subplot(111)
+    #     ax3.plot(np.array(correlation))
+    #     plt.tight_layout()
+    #     plt.savefig('corr.pdf')
 
 
 if __name__ == '__main__':

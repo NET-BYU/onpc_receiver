@@ -1,4 +1,4 @@
-max_len_seq: 12
+max_len_seq: 4
 # symbol: [1, -1, -1, 1]
 
 # sync_word: [1, 1, 0, 0]
@@ -11,5 +11,9 @@ noise:
 signal: -85
 
 quantization: 0
+
+# These options are ignored if samples are simulated
+source_sample_rate: 50 MHz
+destination_sample_rate: 1 MHz
 
 logging_output: no
