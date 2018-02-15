@@ -262,14 +262,45 @@ def transmit_period(sample_files, period_time, graph):
     #     print(offsets)
 
 
+@cli.command()
+@click.argument('sample_file', nargs=1, type=click.File())
+def test_ap_wl(sample_file):
+    data = (line.strip().split() for line in sample_file)
+    data = ([int(p[:-3]) for p in points] for points in data)
+    m1, m2, m3 = zip(*data)
+
+    fig = plt.figure(figsize=(8,4))
+    ax = fig.add_subplot(111)
+
+    ax.plot(m1)
+    # ax.plot(m2)
+    # ax.plot(m3)
+
+    ax.set_ylabel('Noise (dBm)')
+    ax.set_xlabel('Time (??)')
+
+    plt.tight_layout()
+    plt.savefig(f'temp.pdf')
+    plt.close(fig)
 
 
-            if graph:
-                # TODO: Do all graphing here!!!!
-                pass
+@cli.command()
+@click.argument('sample_file', nargs=1, type=click.File())
+def test_ap_proc(sample_file):
+    data = [float(line.strip()) for line in sample_file]
 
 
-    print(list(all_data))
+    fig = plt.figure(figsize=(8,4))
+    ax = fig.add_subplot(111)
+
+    ax.plot(data)
+
+    ax.set_ylabel('Noise (dBm)')
+    ax.set_xlabel('Time (??)')
+
+    plt.tight_layout()
+    plt.savefig(f'temp.pdf')
+    plt.close(fig)
 
 
 
