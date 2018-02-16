@@ -18,16 +18,16 @@ import scipy.io as sio
 #                     format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
 LOGGER = None
 CORR_BUFFER_SIZE = 75
-CORR_STD_FACTOR = 3
+CORR_STD_FACTOR = 4
 DATA_SIZE = 0
 
 signals = []
-samps = []
 correlation = []
 correlation_threshold = []
 correlation_threshold_high = []
 correlation_threshold_low = []
-bits = []
+detected_bits = []
+events = []
 
 ureg = UnitRegistry()
 
@@ -80,6 +80,9 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
         correlation_threshold_low.append(np.nan)
         index += 1
 
+    # Starting
+    # events.append(index)
+
     for corr in correlations:
         index += 1
         corr_buffer = np.roll(corr_buffer, -1)
@@ -104,6 +107,7 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
         # Only if the peak is maintained for a whole symbol size will it be considered a symbol
         if peak_index is not None and index >= (peak_index + symbol_size - 1):
             LOGGER.debug("DETECT Found a bit: %s !!!!!!!!!!", peak)
+            detected_bits.append((peak_index, peak))
             yield peak
             peak = None
             peak_index = None
@@ -117,6 +121,7 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
             correlation.append(corr)
             correlation_threshold_high.append(np.nan)
             correlation_threshold_low.append(np.nan)
+            detected_bits.append((index, corr))
             LOGGER.debug("DETECT Bit 2: %s", corr)
             yield corr
 
@@ -129,6 +134,7 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
                         correlation.append(corr)
                         correlation_threshold_high.append(np.nan)
                         correlation_threshold_low.append(np.nan)
+                    detected_bits.append((index, corr))
                     LOGGER.debug("DETECT Bit %s: %s", i + 3, corr)
                     yield corr
 
@@ -141,12 +147,14 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
                         correlation.append(corr)
                         correlation_threshold_high.append(np.nan)
                         correlation_threshold_low.append(np.nan)
+                    detected_bits.append((index, corr))
                     LOGGER.debug("DETECT Bit %s: %s", i + 1, corr)
                     yield corr
             except ValueError:
                 # Our consumer is letting us know that it can't find the sync word.
                 # Must have been a false alarm, go back to looking for symbols.
                 LOGGER.debug("DETECT Give up trying to find bits")
+                yield None  # Needed to restart generator that threw exception
                 continue
 
         if corr_threshold_low > corr_buffer[-1] or corr_buffer[-1] > corr_threshold_high:
@@ -163,12 +171,15 @@ def bit_decision(symbols):
     for symbol in symbols:
         try:
             if symbol > 0:
+                LOGGER.debug("BIT DECISION: 1")
                 yield 1
             else:
+                LOGGER.debug("BIT DECISION: 0")
                 yield 0
         except Exception as e:
             # Nothing we can do with an error, so we just pass it up
             symbols.throw(e)
+            yield None  # Needed to restart generator that threw exception
 
 
 def get_packet(bits, sync_word, fuzz):
@@ -203,7 +214,6 @@ def decode_signal(samples, symbol, sync_word, sync_word_fuzz):
     # samples = list(samples)
     # LOGGER.debug("DECODE Samples: %s\n", samples)
 
-    samples = graph_samples(samples)
     corr = correlate_samples(iter(samples), symbol)
     symbols = detect_symbols(corr, len(symbol), len(sync_word))
     bits = bit_decision(symbols)
@@ -212,6 +222,7 @@ def decode_signal(samples, symbol, sync_word, sync_word_fuzz):
     for packet in packets:
         LOGGER.debug("PACKET packet: %s", packet)
         LOGGER.warning("Result: True")
+        return True
 
 
 def downsample(samples, amount=1):
@@ -267,20 +278,13 @@ def create_samples(symbol, sync_word, data, rng, signal_params,
     def zero():
         yield from (noise_sample() if i == 1 else signal_sample() for i in symbol)
 
-
-    yield from noise(100)
+    yield from noise(5 * len(symbol))
     for bit in chain(sync_word, data):
         if bit:
             yield from one()
         else:
             yield from zero()
-    yield from noise(100)
-
-
-def graph_samples(samples):
-    for sample in samples:
-        samps.append(sample)
-        yield sample
+    yield from noise(5 * len(symbol))
 
 
 def load_data(file_name):
@@ -368,15 +372,32 @@ def main(id_, folder, params, sample_file=None):
         symbol = np.array(params['symbol'])
     LOGGER.debug("Symbol: %s", symbol)
 
+    # Sync word parameters
+    sync_word = np.array(params['sync_word'])
+    sync_word_fuzz = params['sync_word_fuzz']
 
-    # Take care of sync word
-    sync_word = np.array(params.get('sync_word', [1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 0]))
-    sync_word_fuzz = params.get('sync_word_fuzz', 3)
-
-    # 0xDEAD
+    # Data
     # data = np.array([1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1])
     data = np.array([])
 
+    # Sampling and transmission timing parameters
+    sample_period = ureg(params['destination_sample_period'])
+    transmission_period = ureg(params['transmission_period'])
+    if transmission_period < sample_period:
+        print("ERROR: Sample period must be smaller than transmission period")
+        exit()
+
+    factor = transmission_period / sample_period
+    if factor % 1 != 0:
+        print("ERROR: Sample period and transmission period must be evenly divisible.")
+        print(f"{transmission_period} / {sample_period} = {factor}")
+        exit()
+    factor = int(factor)
+
+    # Adjust symbol to match transmission and sample periods
+    symbol = np.repeat(symbol, factor)
+
+    # Generate the samples (simulated or through a file)
     if sample_file is None:
         seed = random.randrange(sys.maxsize)
         LOGGER.debug("Seed is: %s", seed)
@@ -390,45 +411,43 @@ def main(id_, folder, params, sample_file=None):
     else:
         # Resolve source and destination sample rates
         source_sample_period = ureg(params['source_sample_period'])
-        destination_sample_period = ureg(params['destination_sample_period'])
 
         samples = get_samples_from_file(sample_file,
                                         source_sample_period,
-                                        destination_sample_period)
-
-        # Adjust symbol to match transmission and sample periods
-        transmission_period = ureg(params['transmission_period'])
-
-        if transmission_period < destination_sample_period:
-            print("ERROR: Sample period must be smaller than transmission period")
-            exit()
-
-        factor = transmission_period / destination_sample_period
-        if factor % 1 != 0:
-            print("ERROR: Sample period and transmission period must be evenly divisible.")
-            print(f"{transmission_period} / {destination_sample_period} = {factor}")
-            exit()
-        factor = int(factor)
-
-        symbol = np.repeat(symbol, factor)
+                                        sample_period)
 
 
-    decode_signal(samples, symbol, sync_word, sync_word_fuzz)
+    LOGGER.debug("Starting...")
+    result = decode_signal(samples, symbol, sync_word, sync_word_fuzz)
     LOGGER.debug("Done...")
 
-    # if params.get('command_line', False):
-    #     pass
-    #     fig = plt.figure(figsize=(8,3))
-    #     ax1 = fig.add_subplot(111)
-    #     ax1.plot(np.array(samps))
-    #     plt.tight_layout()
-    #     plt.savefig('signal.png')
+    if params.get('graph', False):
+        fig = plt.figure(figsize=(8,4))
+        ax1 = fig.add_subplot(211)
+        ax1.plot(samples)
+
+        ax2 = fig.add_subplot(212)
+
+        for index in events:
+            ax2.axvline(x=index, color='green')
+
+        ax2.plot(correlation_threshold_high, color='green')
+        ax2.plot(correlation_threshold_low, color='orange')
+        ax2.plot(correlation)
+        ax2.scatter(*zip(*detected_bits), marker='x', color='red')
+
+        ax2.set_xlim(0, len(samples))
+
+        plt.tight_layout()
+        plt.savefig('decoded_signal.pdf')
 
     #     fig = plt.figure(figsize=(8,3))
     #     ax3 = fig.add_subplot(111)
     #     ax3.plot(np.array(correlation))
     #     plt.tight_layout()
     #     plt.savefig('corr.pdf')
+
+    return result
 
 
 if __name__ == '__main__':
@@ -438,11 +457,26 @@ if __name__ == '__main__':
     @click.command()
     @click.argument('config_file', type=click.File('r'))
     @click.option('--sample_file', default=None)
-    def cli(config_file, sample_file):
+    @click.option('--log/--no-log', default=None)
+    @click.option('--graph/--no-graph', default=False)
+    def cli(config_file, sample_file, log, graph):
         config = yaml.load(config_file)
         config['command_line'] = True
+        config['graph'] = graph
 
-        main(id_=__name__, folder=None, params=config, sample_file=sample_file)
+        # If log has been set, then overwrite config
+        if log is not None:
+            config['logging_output'] = log
+
+        result = main(id_=__name__,
+                      folder=None,
+                      params=config,
+                      sample_file=sample_file)
+
+        if result:
+            print("Success!!!")
+        else:
+            print("Didn't find data")
 
 
     cli()
