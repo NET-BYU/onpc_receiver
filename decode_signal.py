@@ -310,15 +310,22 @@ def load_data(file_name):
         return new_data
 
 
-def get_samples_from_file(file_name, src_rate, dst_rate):
+def get_samples_from_file(file_name, src_period, dst_period):
     data = load_data(file_name)
 
     if len(data) > 1:
-        print("WARNING: File contains multiple captures. Selecting the first one.\n")
+        print("WARNING: File contains multiple captures. Selecting the first one.")
         data = data[0]
 
+    factor = (dst_period / src_period).to_base_units()
+    if factor % 1 != 0:
+        print("ERROR: Source and destination sample period must be evenly divisible.")
+        print(f"{dst_period} / {src_period} = {factor}")
+        exit()
+    factor = int(factor)
+
     power_data = np.abs(data) ** 2  # Get magnitude and convert to power
-    factor = int(round((src_rate / dst_rate).to_base_units()))
+
 
     # Downsample source to destination
     power_data =  np.array([power_data[i:i+factor].mean()
@@ -382,15 +389,32 @@ def main(id_, folder, params, sample_file=None):
         samples = list(samples)
     else:
         # Resolve source and destination sample rates
-        source_sample_rate = ureg(params['source_sample_rate'])
-        destination_sample_rate = ureg(params['destination_sample_rate'])
+        source_sample_period = ureg(params['source_sample_period'])
+        destination_sample_period = ureg(params['destination_sample_period'])
 
         samples = get_samples_from_file(sample_file,
-                                        source_sample_rate,
-                                        destination_sample_rate)
+                                        source_sample_period,
+                                        destination_sample_period)
 
-    # decode_signal(samples, symbol, sync_word, sync_word_fuzz)
-    # LOGGER.debug("Done...")
+        # Adjust symbol to match transmission and sample periods
+        transmission_period = ureg(params['transmission_period'])
+
+        if transmission_period < destination_sample_period:
+            print("ERROR: Sample period must be smaller than transmission period")
+            exit()
+
+        factor = transmission_period / destination_sample_period
+        if factor % 1 != 0:
+            print("ERROR: Sample period and transmission period must be evenly divisible.")
+            print(f"{transmission_period} / {destination_sample_period} = {factor}")
+            exit()
+        factor = int(factor)
+
+        symbol = np.repeat(symbol, factor)
+
+
+    decode_signal(samples, symbol, sync_word, sync_word_fuzz)
+    LOGGER.debug("Done...")
 
     # if params.get('command_line', False):
     #     pass

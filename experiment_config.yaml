@@ -13,7 +13,9 @@ signal: -85
 quantization: 0
 
 # These options are ignored if samples are simulated
-source_sample_rate: 50 MHz
-destination_sample_rate: 1 MHz
+source_sample_period: 20 ns
+destination_sample_period: 1 us
+
+transmission_period: 700 us
 
 logging_output: no
