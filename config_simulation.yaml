@@ -1,0 +1,18 @@
+max_len_seq: 4
+# symbol: [1, -1, -1, 1]
+
+sync_word: [1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 0]
+sync_word_fuzz: 3
+
+noise:
+  mu: -90
+  sigma: 5.3322
+
+signal: -60
+
+quantization: 0
+
+destination_sample_period: 1 us
+transmission_period: 100 us
+
+logging_output: no
