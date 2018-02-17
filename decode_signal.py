@@ -399,7 +399,7 @@ def main(id_, folder, params, sample_file=None):
 
     # Generate the samples (simulated or through a file)
     if sample_file is None:
-        seed = random.randrange(sys.maxsize)
+        seed = params.get('seed', random.randrange(sys.maxsize))
         LOGGER.debug("Seed is: %s", seed)
         rng = random.Random(seed)
 
