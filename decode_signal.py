@@ -1,5 +1,5 @@
 from collections import deque
-from itertools import chain
+import itertools
 import logging
 from math import log10
 import random
@@ -120,33 +120,37 @@ def detect_symbols(correlations, symbol_size, sync_word_size, corr_std_factor):
             correlation_threshold_low.append(np.nan)
             events.append((index, corr, 'detected_bit'))
             LOGGER.debug("DETECT Bit 2: %s", corr)
-            yield corr - peak_mean
+            yield corr - corr_buffer.mean()
 
             try:
                 for i in range(sync_word_size - 2):
                     LOGGER.debug("DETECT Looking for %s bit of sync word", i + 2)
+                    temp_corr_buffer = []
                     for _ in range(symbol_size):
                         corr = next(correlations)
+                        temp_corr_buffer.append(corr)
                         index += 1
                         correlation.append(corr)
                         correlation_threshold_high.append(np.nan)
                         correlation_threshold_low.append(np.nan)
                     events.append((index, corr, 'detected_bit'))
                     LOGGER.debug("DETECT Bit %s: %s", i + 3, corr)
-                    yield corr - peak_mean
+                    yield corr - np.array([temp_corr_buffer]).mean()
 
                 # Found the sync word, keep going!
                 for i in range(DATA_SIZE):
                     LOGGER.debug("DETECT Looking for %s bit of data", i + 1)
+                    temp_corr_buffer = []
                     for _ in range(symbol_size):
                         corr = next(correlations)
+                        temp_corr_buffer.append(corr)
                         index += 1
                         correlation.append(corr)
                         correlation_threshold_high.append(np.nan)
                         correlation_threshold_low.append(np.nan)
                     events.append((index, corr, 'detected_bit'))
                     LOGGER.debug("DETECT Bit %s: %s", i + 1, corr)
-                    yield corr - peak_mean
+                    yield corr - np.array([temp_corr_buffer]).mean()
             except ValueError:
                 # Our consumer is letting us know that it can't find the sync word.
                 # Must have been a false alarm, go back to looking for symbols.
@@ -256,41 +260,64 @@ def dbm_to_mw(dBm):
     return 10**((dBm)/10.)
 
 
-def create_samples(symbol, sync_word, data, rng, signal_params,
-                   noise_params, quantization_params):
+def create_samples(symbol, sync_word, data, rng, sample_factor, samples_per_transmission,
+                   signal_params, noise_params, quantization, cs_params):
+    """
+    In this function, there is no concept of time. Everything is relative to
+    the transmit rate / sample rate.
+    """
     LOGGER.debug("Signal parameters: %s", signal_params)
     LOGGER.debug("Noise parameters: %s", noise_params)
 
     def signal_sample():
-        signals.append(1)
         noise = dbm_to_mw(rng.gauss(**noise_params))
         signal = dbm_to_mw(signal_params)
         total = noise + signal
         return quantize(mw_to_dbm(total))
 
     def noise_sample():
-        signals.append(0)
         return quantize(rng.gauss(**noise_params))
 
     def noise(num):
         yield from (noise_sample() for _ in range(num))
 
     def quantize(sample):
-        return round(sample, quantization_params)
+        return round(sample, quantization)
 
-    def one():
-        yield from (signal_sample() if i == 1 else noise_sample() for i in symbol)
+    slot_size = sample_factor
+    transmit_slots = samples_per_transmission
 
-    def zero():
-        yield from (noise_sample() if i == 1 else signal_sample() for i in symbol)
+    yield from noise(5 * len(symbol) * sample_factor)  # Add some noise padding
+    slots_left = 0
+    for bit in itertools.chain(sync_word, data):
+        for chip in symbol:
+            slots_left += slot_size
+            if bit == chip:
+                if slots_left < slot_size:
+                    # The previous transmission crossed slots -- we can't transmit!
+                    LOGGER.warning("Unable to transmit because previous transmission!")
+                    yield from (noise_sample() for _ in range(slots_left))
+                    slots_left = 0
+                    continue
 
-    yield from noise(5 * len(symbol))
-    for bit in chain(sync_word, data):
-        if bit:
-            yield from one()
-        else:
-            yield from zero()
-    yield from noise(5 * len(symbol))
+                # Carrier sensing
+                tx_slots_delay = int(round(abs(rng.gauss(**cs_params))))  # TODO: Fix this! Is CS Gaussian?
+                yield from (noise_sample() for _ in range(tx_slots_delay))
+
+                # Transmit
+                yield from (signal_sample() for _ in range(transmit_slots))
+
+                # Figure out how much time is left in slot
+                slots_left = slot_size - tx_slots_delay - transmit_slots
+
+                if slots_left > 0:
+                    yield from (noise_sample() for _ in range(slots_left))
+                    slots_left = 0
+
+            else:
+                yield from (noise_sample() for _ in range(slot_size))
+                slots_left = 0
+    yield from noise(5 * len(symbol) * sample_factor)  # Add some noise padding
 
 
 def load_data(file_name):
@@ -377,7 +404,6 @@ def main(id_, folder, params, sample_file=None):
     if 'max_len_seq' in params:
         LOGGER.debug("Max Length Sequence: %s", params['max_len_seq'])
         symbol, state = signal.max_len_seq(params['max_len_seq'])
-        symbol = symbol * 2 - 1
     elif 'symbol' in params:
         symbol = np.array(params['symbol'])
     LOGGER.debug("Symbol: %s", symbol)
@@ -392,25 +418,32 @@ def main(id_, folder, params, sample_file=None):
 
     # Sampling and transmission timing parameters
     sample_period = ureg(params['destination_sample_period'])
-    transmission_period = ureg(params['transmission_period'])
-    if transmission_period < sample_period:
+    on_off_period = ureg(params['on_off_period'])
+    if on_off_period < sample_period:
         LOGGER.error("Sample period must be smaller than transmission period")
         exit()
 
-    factor = transmission_period / sample_period
-    if factor % 1 != 0:
-        LOGGER.error("Sample period and transmission period must be evenly divisible: %s / %s = %s",
-                     transmission_period,
+    sample_factor = on_off_period / sample_period
+    if sample_factor % 1 != 0:
+        LOGGER.error("Sample period and on/off period must be evenly divisible: %s / %s = %s",
+                     on_off_period,
                      sample_period,
-                     factor)
+                     sample_factor)
         exit()
-    factor = int(factor)
+    sample_factor = int(sample_factor)
+
+    transmission_time = ureg(params['transmit_time'])
+    samples_per_transmission =  transmission_time / sample_period
+    if samples_per_transmission % 1 != 0:
+        LOGGER.error("Sample period and transmission time must be evenly divisible: %s / %s = %s",
+                     transmission_time,
+                     sample_period,
+                     samples_per_transmission)
+        exit()
+    samples_per_transmission = int(samples_per_transmission)
 
     global CORR_BUFFER_SIZE
-    CORR_BUFFER_SIZE = factor * 15
-
-    # Adjust symbol to match transmission and sample periods
-    symbol = np.repeat(symbol, factor)
+    CORR_BUFFER_SIZE = sample_factor * 15
 
     # Generate the samples (simulated or through a file)
     if sample_file is None:
@@ -418,10 +451,17 @@ def main(id_, folder, params, sample_file=None):
         LOGGER.warning("Seed is: %s", seed)
         rng = random.Random(seed)
 
-        samples = create_samples(symbol, sync_word, data, rng,
+        # Take care of carrier sensing
+        if params.get('carrier_sensing'):
+            cs = params['carrier_sensing']
+            cs['sigma'] = (ureg(cs['sigma']) / sample_period).magnitude
+            cs['mu'] = (ureg(cs['mu']) / sample_period).magnitude
+
+        samples = create_samples(symbol, sync_word, data, rng, sample_factor, samples_per_transmission,
                                  signal_params=params['signal'],
                                  noise_params=params['noise'],
-                                 quantization_params=params.get('quantization', None))
+                                 quantization=params.get('quantization'),
+                                 cs_params=params.get('carrier_sensing', {'mu': 0, 'sigma': 0}))
         samples = list(samples)
     else:
         # Resolve source and destination sample rates
@@ -436,7 +476,7 @@ def main(id_, folder, params, sample_file=None):
     corr_std_factor = params['correlation_std_threshold']
 
     LOGGER.debug("Starting...")
-    result = decode_signal(samples, symbol, sync_word, sync_word_fuzz, corr_std_factor)
+    result = decode_signal(samples, np.repeat(symbol, sample_factor), sync_word, sync_word_fuzz, corr_std_factor)
     LOGGER.debug("Done...")
 
     if params.get('graph', False):
@@ -472,7 +512,7 @@ def main(id_, folder, params, sample_file=None):
 
         plt.legend()
         plt.tight_layout()
-        plt.savefig('decoded_signal.pdf')
+        plt.savefig(f'decoded_signal-{id_}.pdf')
 
     #     fig = plt.figure(figsize=(8,3))
     #     ax3 = fig.add_subplot(111)

@@ -14,7 +14,12 @@ correlation_std_threshold: 4
 
 quantization: 0
 
+carrier_sensing:
+  mu: 0 us
+  sigma: 2 us
+
 destination_sample_period: 1 us
-transmission_period: 100 us
+on_off_period: 50 us
+transmit_time: 45 us
 
 logging_output: no
