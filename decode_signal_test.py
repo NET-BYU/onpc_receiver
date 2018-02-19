@@ -7,6 +7,7 @@ import os
 import time
 
 import click
+import json
 import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
@@ -35,8 +36,13 @@ def _run(config, num, executor):
         folders = itertools.repeat(os.path.join('tests', str(now)))
         params = itertools.repeat(config)
 
+        results = {}
         for id_, result in zip(ids, executor.map(decode_signal.main, ids, folders, params)):
+            results[id_] = result
             pbar.update()
+
+    with open(os.path.join(test_path, 'results.json'), 'w') as f:
+        json.dump(results, f, indent=2)
 
 
 def split_num_list(ctx, param, value):
@@ -48,22 +54,16 @@ def split_num_list(ctx, param, value):
         raise click.BadParameter('List must only contain numbers')
 
 
-def successful_experiment(file_name):
-    file = open(file_name)
-    lines = (line for line in file)
-    lines = ('Result: True' in line for line in lines)
-
-    return any(lines)
-
-
 def analyze_experiment(experiment_folder):
     files = glob.glob(os.path.join(experiment_folder, '*.log'))
 
     with open(os.path.join(experiment_folder, 'config.yaml')) as f:
         config = yaml.load(f)
 
-    successful = sum(successful_experiment(f) for f in files)
-    total = len(files)
+    with open(os.path.join(experiment_folder, 'results.json')) as f:
+        results = json.load(f)
+    successful = sum(1 for value in results.values() if value)
+    total = len(results.values())
 
     return {"folder": experiment_folder,
             "config": config,
@@ -118,10 +118,8 @@ def analyze(graph):
         results.append(result)
         print(f"{result['folder']} ({result['config']}): {result['successful']}/{result['total']} = {result['successful']/result['total']:.2%}")
 
-
     if not graph:
         return
-
 
     data = ((r['config']['signal'], r['config']['max_len_seq'], (r['successful'] / r['total']) * 100)
             for r in results)
