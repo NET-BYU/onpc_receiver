@@ -27,6 +27,7 @@ correlation_threshold = []
 correlation_threshold_high = []
 correlation_threshold_low = []
 detected_bits = []
+detected_peaks = []
 events = []
 
 ureg = UnitRegistry()
@@ -163,6 +164,7 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
             if peak is None or abs(corr_buffer[-1] - corr_mean) > abs(peak - corr_mean):
                 peak = corr_buffer[-1]
                 peak_index = index
+                detected_peaks.append((peak_index, peak))
                 LOGGER.debug("DETECT New peak %s !!!!!!", peak)
 
 
@@ -434,7 +436,9 @@ def main(id_, folder, params, sample_file=None):
         ax2.plot(correlation_threshold_high, color='green')
         ax2.plot(correlation_threshold_low, color='orange')
         ax2.plot(correlation)
+
         ax2.scatter(*zip(*detected_bits), marker='x', color='red')
+        ax2.scatter(*zip(*detected_peaks), marker='x', color='yellow')
 
         ax2.set_xlim(0, len(samples))
 
