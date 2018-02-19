@@ -17,7 +17,7 @@ import scipy.io as sio
 # logging.basicConfig(level=logging.DEBUG,
 #                     format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
 LOGGER = None
-CORR_BUFFER_SIZE = 75
+CORR_BUFFER_SIZE = None
 DATA_SIZE = 0
 
 signals = []
@@ -406,6 +406,9 @@ def main(id_, folder, params, sample_file=None):
         exit()
     factor = int(factor)
 
+    global CORR_BUFFER_SIZE
+    CORR_BUFFER_SIZE = factor * 15
+
     # Adjust symbol to match transmission and sample periods
     symbol = np.repeat(symbol, factor)
 
@@ -443,17 +446,23 @@ def main(id_, folder, params, sample_file=None):
 
         ax2 = fig.add_subplot(212)
 
-        ax2.scatter(*zip(*[(x, y) for x, y, event in events if event == 'detected_peak_2']),
-                    marker='x',
-                    color='grey')
+        scatter_data = [(x, y) for x, y, event in events if event == 'detected_peak_2']
+        if scatter_data:
+            ax2.scatter(*zip(*scatter_data),
+                        marker='x',
+                        color='grey')
 
-        ax2.scatter(*zip(*[(x, y) for x, y, event in events if event == 'detected_peak']),
-                    marker='x',
-                    color='yellow')
+        scatter_data = [(x, y) for x, y, event in events if event == 'detected_peak']
+        if scatter_data:
+            ax2.scatter(*zip(*scatter_data),
+                        marker='x',
+                        color='yellow')
 
-        ax2.scatter(*zip(*[(x, y) for x, y, event in events if event == 'detected_bit']),
-                    marker='x',
-                    color='red')
+        scatter_data = [(x, y) for x, y, event in events if event == 'detected_bit']
+        if scatter_data:
+            ax2.scatter(*zip(*scatter_data),
+                        marker='x',
+                        color='red')
 
         ax2.plot(correlation_threshold_high, color='green', label='upper threshold')
         ax2.plot(correlation_threshold_low, color='orange', label='lower threshold')
