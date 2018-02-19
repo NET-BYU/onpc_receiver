@@ -361,11 +361,14 @@ def main(id_, folder, params, sample_file=None):
     else:
         folder_name = 'out.log'
 
-    if params.get('logging_output', True):
+    if params.get('logging_output', True):  # Give the full log to a file
         handler = logging.FileHandler(folder_name, mode='w')
         LOGGER.setLevel(logging.DEBUG)
-    else:
+    elif params.get('command_line', False):  # Give only important stuff to the terminal
         handler = logging.StreamHandler()
+        LOGGER.setLevel(logging.WARN)
+    else:  # Give only important stuff to a file
+        handler = logging.FileHandler(folder_name, mode='w')
         LOGGER.setLevel(logging.WARN)
 
     handler.setFormatter(formatter)
