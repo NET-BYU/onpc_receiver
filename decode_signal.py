@@ -229,8 +229,6 @@ def decode_signal(samples, symbol, sync_word, sync_word_fuzz):
     packets = get_packet(bits, sync_word, sync_word_fuzz)
 
     for packet in packets:
-        LOGGER.debug("PACKET packet: %s", packet)
-        LOGGER.warning("Result: True")
         return True
 
 
@@ -327,13 +325,15 @@ def get_samples_from_file(file_name, src_period, dst_period):
     data = load_data(file_name)
 
     if len(data) > 1:
-        print("WARNING: File contains multiple captures. Selecting the first one.")
+        LOGGER.warning("File contains multiple captures. Selecting the first one.")
         data = data[0]
 
     factor = (dst_period / src_period).to_base_units()
     if factor % 1 != 0:
-        print("ERROR: Source and destination sample period must be evenly divisible.")
-        print(f"{dst_period} / {src_period} = {factor}")
+        LOGGER.error("Source and destination sample period must be evenly divisible: %s / %s = %s",
+                     dst_period,
+                     src_period,
+                     factor)
         exit()
     factor = int(factor)
 
@@ -361,16 +361,15 @@ def main(id_, folder, params, sample_file=None):
     else:
         folder_name = 'out.log'
 
-
-    handler = logging.FileHandler(folder_name, mode='w')
-    handler.setFormatter(formatter)
-
-    LOGGER.addHandler(handler)
-
     if params.get('logging_output', True):
+        handler = logging.FileHandler(folder_name, mode='w')
         LOGGER.setLevel(logging.DEBUG)
     else:
+        handler = logging.StreamHandler()
         LOGGER.setLevel(logging.WARN)
+
+    handler.setFormatter(formatter)
+    LOGGER.addHandler(handler)
 
     # Take care of symbol generation
     if 'max_len_seq' in params:
@@ -393,13 +392,15 @@ def main(id_, folder, params, sample_file=None):
     sample_period = ureg(params['destination_sample_period'])
     transmission_period = ureg(params['transmission_period'])
     if transmission_period < sample_period:
-        print("ERROR: Sample period must be smaller than transmission period")
+        LOGGER.error("Sample period must be smaller than transmission period")
         exit()
 
     factor = transmission_period / sample_period
     if factor % 1 != 0:
-        print("ERROR: Sample period and transmission period must be evenly divisible.")
-        print(f"{transmission_period} / {sample_period} = {factor}")
+        LOGGER.error("Sample period and transmission period must be evenly divisible: %s / %s = %s",
+                     transmission_period,
+                     sample_period,
+                     factor)
         exit()
     factor = int(factor)
 
@@ -409,7 +410,7 @@ def main(id_, folder, params, sample_file=None):
     # Generate the samples (simulated or through a file)
     if sample_file is None:
         seed = params.get('seed', random.randrange(sys.maxsize))
-        LOGGER.debug("Seed is: %s", seed)
+        LOGGER.warning("Seed is: %s", seed)
         rng = random.Random(seed)
 
         samples = create_samples(symbol, sync_word, data, rng,
