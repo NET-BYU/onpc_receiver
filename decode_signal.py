@@ -18,7 +18,7 @@ import scipy.io as sio
 #                     format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
 LOGGER = None
 CORR_BUFFER_SIZE = 75
-CORR_STD_FACTOR = 4
+CORR_STD_FACTOR = 5
 DATA_SIZE = 0
 
 signals = []
@@ -66,6 +66,7 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
     index = 0
     peak = None
     peak_index = None
+    peak_mean = None
 
     # Create buffer
     corr_buffer = np.zeros(CORR_BUFFER_SIZE)
@@ -107,6 +108,7 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
             yield peak
             peak = None
             peak_index = None
+            peak_mean = None
 
             LOGGER.debug("DETECT Looking for 2 bit of sync word")
 
@@ -153,14 +155,24 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
                 yield None  # Needed to restart generator that threw exception
                 continue
 
+        # If the correlation value is higher than one of the thresholds
         if corr_threshold_low > corr_buffer[-1] or corr_buffer[-1] > corr_threshold_high:
             corr_mean = corr_buffer.mean()
 
+            # If we don't have a peak or if the peak is greater than the current peak
             if peak is None or abs(corr_buffer[-1] - corr_mean) > abs(peak - corr_mean):
                 peak = corr_buffer[-1]
                 peak_index = index
+                peak_mean = corr_mean
                 events.append((peak_index, peak, 'detected_peak'))
                 LOGGER.debug("DETECT New peak %s !!!!!!", peak)
+
+        # If we already have a peak and the current correlation value is greater than that peak
+        if peak is not None and abs(corr_buffer[-1] - peak_mean) > abs(peak - peak_mean):
+            peak = corr_buffer[-1]
+            peak_index = index
+            events.append((peak_index, peak, 'detected_peak_2'))
+            LOGGER.debug("DETECT New peak %s !!!!!!", peak)
 
 
 def bit_decision(symbols):
@@ -425,18 +437,26 @@ def main(id_, folder, params, sample_file=None):
 
         ax2 = fig.add_subplot(212)
 
-        for x, y, type_ in events:
-            if type_ == 'detected_bit':
-                ax2.scatter(x, y, marker='x', color='red')
-            elif type_ == 'detected_peak':
-                ax2.scatter(x, y, marker='x', color='yellow')
 
-        ax2.plot(correlation_threshold_high, color='green')
-        ax2.plot(correlation_threshold_low, color='orange')
-        ax2.plot(correlation)
+        ax2.scatter(*zip(*[(x, y) for x, y, event in events if event == 'detected_peak_2']),
+                    marker='x',
+                    color='grey')
+
+        ax2.scatter(*zip(*[(x, y) for x, y, event in events if event == 'detected_peak']),
+                    marker='x',
+                    color='yellow')
+
+        ax2.scatter(*zip(*[(x, y) for x, y, event in events if event == 'detected_bit']),
+                    marker='x',
+                    color='red')
+
+        ax2.plot(correlation_threshold_high, color='green', label='upper threshold')
+        ax2.plot(correlation_threshold_low, color='orange', label='lower threshold')
+        ax2.plot(correlation, label='correlation')
 
         ax2.set_xlim(0, len(samples))
 
+        plt.legend()
         plt.tight_layout()
         plt.savefig('decoded_signal.pdf')
 
