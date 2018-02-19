@@ -105,10 +105,10 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
         if peak_index is not None and index >= (peak_index + symbol_size - 1):
             LOGGER.debug("DETECT Found a bit: %s !!!!!!!!!!", peak)
             events.append((peak_index, peak, 'detected_bit'))
-            yield peak
+            yield peak - peak_mean
             peak = None
             peak_index = None
-            peak_mean = None
+            # Don't reset peak_mean because it is used later...
 
             LOGGER.debug("DETECT Looking for 2 bit of sync word")
 
@@ -121,7 +121,7 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
             correlation_threshold_low.append(np.nan)
             events.append((index, corr, 'detected_bit'))
             LOGGER.debug("DETECT Bit 2: %s", corr)
-            yield corr
+            yield corr - peak_mean
 
             try:
                 for i in range(sync_word_size - 2):
@@ -134,7 +134,7 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
                         correlation_threshold_low.append(np.nan)
                     events.append((index, corr, 'detected_bit'))
                     LOGGER.debug("DETECT Bit %s: %s", i + 3, corr)
-                    yield corr
+                    yield corr - peak_mean
 
                 # Found the sync word, keep going!
                 for i in range(DATA_SIZE):
@@ -147,7 +147,7 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
                         correlation_threshold_low.append(np.nan)
                     events.append((index, corr, 'detected_bit'))
                     LOGGER.debug("DETECT Bit %s: %s", i + 1, corr)
-                    yield corr
+                    yield corr - peak_mean
             except ValueError:
                 # Our consumer is letting us know that it can't find the sync word.
                 # Must have been a false alarm, go back to looking for symbols.
