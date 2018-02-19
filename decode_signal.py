@@ -26,8 +26,6 @@ correlation = []
 correlation_threshold = []
 correlation_threshold_high = []
 correlation_threshold_low = []
-detected_bits = []
-detected_peaks = []
 events = []
 
 ureg = UnitRegistry()
@@ -81,9 +79,6 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
         correlation_threshold_low.append(np.nan)
         index += 1
 
-    # Starting
-    # events.append(index)
-
     for corr in correlations:
         index += 1
         corr_buffer = np.roll(corr_buffer, -1)
@@ -108,7 +103,7 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
         # Only if the peak is maintained for a whole symbol size will it be considered a symbol
         if peak_index is not None and index >= (peak_index + symbol_size - 1):
             LOGGER.debug("DETECT Found a bit: %s !!!!!!!!!!", peak)
-            detected_bits.append((peak_index, peak))
+            events.append((peak_index, peak, 'detected_bit'))
             yield peak
             peak = None
             peak_index = None
@@ -122,7 +117,7 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
             correlation.append(corr)
             correlation_threshold_high.append(np.nan)
             correlation_threshold_low.append(np.nan)
-            detected_bits.append((index, corr))
+            events.append((index, corr, 'detected_bit'))
             LOGGER.debug("DETECT Bit 2: %s", corr)
             yield corr
 
@@ -135,7 +130,7 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
                         correlation.append(corr)
                         correlation_threshold_high.append(np.nan)
                         correlation_threshold_low.append(np.nan)
-                    detected_bits.append((index, corr))
+                    events.append((index, corr, 'detected_bit'))
                     LOGGER.debug("DETECT Bit %s: %s", i + 3, corr)
                     yield corr
 
@@ -148,7 +143,7 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
                         correlation.append(corr)
                         correlation_threshold_high.append(np.nan)
                         correlation_threshold_low.append(np.nan)
-                    detected_bits.append((index, corr))
+                    events.append((index, corr, 'detected_bit'))
                     LOGGER.debug("DETECT Bit %s: %s", i + 1, corr)
                     yield corr
             except ValueError:
@@ -164,7 +159,7 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
             if peak is None or abs(corr_buffer[-1] - corr_mean) > abs(peak - corr_mean):
                 peak = corr_buffer[-1]
                 peak_index = index
-                detected_peaks.append((peak_index, peak))
+                events.append((peak_index, peak, 'detected_peak'))
                 LOGGER.debug("DETECT New peak %s !!!!!!", peak)
 
 
@@ -430,15 +425,15 @@ def main(id_, folder, params, sample_file=None):
 
         ax2 = fig.add_subplot(212)
 
-        for index in events:
-            ax2.axvline(x=index, color='green')
+        for x, y, type_ in events:
+            if type_ == 'detected_bit':
+                ax2.scatter(x, y, marker='x', color='red')
+            elif type_ == 'detected_peak':
+                ax2.scatter(x, y, marker='x', color='yellow')
 
         ax2.plot(correlation_threshold_high, color='green')
         ax2.plot(correlation_threshold_low, color='orange')
         ax2.plot(correlation)
-
-        ax2.scatter(*zip(*detected_bits), marker='x', color='red')
-        ax2.scatter(*zip(*detected_peaks), marker='x', color='yellow')
 
         ax2.set_xlim(0, len(samples))
 
