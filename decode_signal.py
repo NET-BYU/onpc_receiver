@@ -18,7 +18,6 @@ import scipy.io as sio
 #                     format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
 LOGGER = None
 CORR_BUFFER_SIZE = 75
-CORR_STD_FACTOR = 5
 DATA_SIZE = 0
 
 signals = []
@@ -60,7 +59,7 @@ def correlate_samples(samples, symbol):
         yield result
 
 
-def detect_symbols(correlations, symbol_size, sync_word_size):
+def detect_symbols(correlations, symbol_size, sync_word_size, corr_std_factor):
     """Detects if a correlation is greater than some threshold"""
 
     index = 0
@@ -85,8 +84,8 @@ def detect_symbols(correlations, symbol_size, sync_word_size):
         corr_buffer = np.roll(corr_buffer, -1)
         corr_buffer[-1] = corr
 
-        corr_threshold_high = corr_buffer.mean() + CORR_STD_FACTOR * corr_buffer.std()
-        corr_threshold_low = corr_buffer.mean() - CORR_STD_FACTOR * corr_buffer.std()
+        corr_threshold_high = corr_buffer.mean() + corr_std_factor * corr_buffer.std()
+        corr_threshold_low = corr_buffer.mean() - corr_std_factor * corr_buffer.std()
 
         LOGGER.debug("DETECT Corr Buffer: \n%s", corr_buffer)
         LOGGER.debug("DETECT Mean: %s", corr_buffer.mean())
@@ -219,12 +218,12 @@ def get_packet(bits, sync_word, fuzz):
             bits.throw(ValueError)
 
 
-def decode_signal(samples, symbol, sync_word, sync_word_fuzz):
+def decode_signal(samples, symbol, sync_word, sync_word_fuzz, corr_std_factor):
     # samples = list(samples)
     # LOGGER.debug("DECODE Samples: %s\n", samples)
 
     corr = correlate_samples(iter(samples), symbol)
-    symbols = detect_symbols(corr, len(symbol), len(sync_word))
+    symbols = detect_symbols(corr, len(symbol), len(sync_word), corr_std_factor)
     bits = bit_decision(symbols)
     packets = get_packet(bits, sync_word, sync_word_fuzz)
 
@@ -430,8 +429,11 @@ def main(id_, folder, params, sample_file=None):
                                         sample_period)
 
 
+    # Correlation std dev threshold
+    corr_std_factor = params['correlation_std_threshold']
+
     LOGGER.debug("Starting...")
-    result = decode_signal(samples, symbol, sync_word, sync_word_fuzz)
+    result = decode_signal(samples, symbol, sync_word, sync_word_fuzz, corr_std_factor)
     LOGGER.debug("Done...")
 
     if params.get('graph', False):
@@ -440,7 +442,6 @@ def main(id_, folder, params, sample_file=None):
         ax1.plot(samples)
 
         ax2 = fig.add_subplot(212)
-
 
         ax2.scatter(*zip(*[(x, y) for x, y, event in events if event == 'detected_peak_2']),
                     marker='x',

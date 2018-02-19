@@ -10,6 +10,8 @@ noise:
 
 signal: -85
 
+correlation_std_threshold: 4
+
 quantization: 0
 
 source_sample_period: 20 ns
