@@ -71,6 +71,11 @@ def analyze_experiment(experiment_folder):
             "total": total}
 
 
+def check_config(config):
+    if 'seed' in config and not click.confirm('Seed is set in the configuration file. Are you sure about that?'):
+        exit()
+
+
 @click.group()
 def cli():
     pass
@@ -81,6 +86,7 @@ def cli():
 @click.argument('num', type=click.INT)
 def run(config_file, num):
     config = yaml.load(config_file)
+    check_config(config)
     with concurrent.futures.ProcessPoolExecutor(max_workers=psutil.cpu_count()) as executor:
         _run(config, num, executor)
 
@@ -92,6 +98,7 @@ def run(config_file, num):
 @click.option('--signal', callback=split_num_list)
 def batch(config_file, num, max_len_seq, signal):
     config = yaml.load(config_file)
+    check_config(config)
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=psutil.cpu_count()) as executor:
         for mls, sig in itertools.product(max_len_seq, signal):
