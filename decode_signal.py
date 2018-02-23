@@ -341,7 +341,7 @@ def load_data(file_name):
                 key = ''
             new_data.append(np.array([d[0] for d in data['Y{}'.format(key)]]))
 
-        with open('{}.npy'.format(file_name[:-3]), 'wb') as f:
+        with open('{}npy'.format(file_name[:-3]), 'wb') as f:
            np.save(f, new_data)
 
         return new_data
@@ -352,7 +352,7 @@ def get_samples_from_file(file_name, src_period, dst_period):
 
     if len(data) > 1:
         LOGGER.warning("File contains multiple captures. Selecting the first one.")
-        data = data[0]
+    data = data[0]
 
     factor = (dst_period / src_period).to_base_units()
     if factor % 1 != 0:
@@ -363,8 +363,8 @@ def get_samples_from_file(file_name, src_period, dst_period):
         exit()
     factor = int(factor)
 
-    power_data = np.abs(data) ** 2  # Get magnitude and convert to power
-
+    # Get magnitude and convert to power
+    power_data = np.abs(data) ** 2
 
     # Downsample source to destination
     power_data =  np.array([power_data[i:i+factor].mean()
@@ -376,7 +376,7 @@ def get_samples_from_file(file_name, src_period, dst_period):
     return power_data
 
 
-def main(id_, folder, params, sample_file=None):
+def main(id_, folder, params):
     # Set up logging
     global LOGGER
     LOGGER = logging.getLogger("{}".format(id_))
@@ -416,7 +416,7 @@ def main(id_, folder, params, sample_file=None):
     # data = np.array([1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1])
     data = np.array([])
 
-    # Sampling and transmission timing parameters
+    # Sampling timing parameters
     sample_period = ureg(params['destination_sample_period'])
     on_off_period = ureg(params['on_off_period'])
     if on_off_period < sample_period:
@@ -432,24 +432,32 @@ def main(id_, folder, params, sample_file=None):
         exit()
     sample_factor = int(sample_factor)
 
-    transmission_time = ureg(params['transmit_time'])
-    samples_per_transmission =  transmission_time / sample_period
-    if samples_per_transmission % 1 != 0:
-        LOGGER.error("Sample period and transmission time must be evenly divisible: %s / %s = %s",
-                     transmission_time,
-                     sample_period,
-                     samples_per_transmission)
-        exit()
-    samples_per_transmission = int(samples_per_transmission)
-
     global CORR_BUFFER_SIZE
     CORR_BUFFER_SIZE = sample_factor * 15
 
     # Generate the samples (simulated or through a file)
-    if sample_file is None:
+    if 'sample_file' in params:
+        # Resolve source and destination sample rates
+        source_sample_period = ureg(params['source_sample_period'])
+
+        samples = get_samples_from_file(params['sample_file'],
+                                        source_sample_period,
+                                        sample_period)
+    else:
         seed = params.get('seed', random.randrange(sys.maxsize))
         LOGGER.warning("Seed is: %s", seed)
         rng = random.Random(seed)
+
+        # Transmission timing parameters
+        transmission_time = ureg(params['transmit_time'])
+        samples_per_transmission =  transmission_time / sample_period
+        if samples_per_transmission % 1 != 0:
+            LOGGER.error("Sample period and transmission time must be evenly divisible: %s / %s = %s",
+                         transmission_time,
+                         sample_period,
+                         samples_per_transmission)
+            exit()
+        samples_per_transmission = int(samples_per_transmission)
 
         # Take care of carrier sensing
         if params.get('carrier_sensing'):
@@ -463,14 +471,6 @@ def main(id_, folder, params, sample_file=None):
                                  quantization=params.get('quantization'),
                                  cs_params=params.get('carrier_sensing', {'mu': 0, 'sigma': 0}))
         samples = list(samples)
-    else:
-        # Resolve source and destination sample rates
-        source_sample_period = ureg(params['source_sample_period'])
-
-        samples = get_samples_from_file(sample_file,
-                                        source_sample_period,
-                                        sample_period)
-
 
     # Correlation std dev threshold
     corr_std_factor = params['correlation_std_threshold']
@@ -541,10 +541,12 @@ if __name__ == '__main__':
         if log is not None:
             config['logging_output'] = log
 
+        if sample_file is not None:
+            config['sample_file'] = sample_file
+
         result = main(id_=__name__,
                       folder=None,
-                      params=config,
-                      sample_file=sample_file)
+                      params=config)
 
         if result:
             print("Success!!!")
