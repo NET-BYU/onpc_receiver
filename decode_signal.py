@@ -10,6 +10,7 @@ import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from pint import UnitRegistry
 from scipy import signal
 import scipy.io as sio
@@ -26,6 +27,7 @@ correlation_threshold = []
 correlation_threshold_high = []
 correlation_threshold_low = []
 events = []
+index = 0
 
 ureg = UnitRegistry()
 
@@ -36,14 +38,24 @@ ureg = UnitRegistry()
 
 def correlate_samples(samples, symbol):
     """Multiples a buffer of samples by a symbol"""
+    global index
 
     # Create buffer
     sample_buffer = np.zeros(len(symbol))
+
+    LOGGER.debug("COR Sample buffer length: %s", len(sample_buffer))
 
     # Build up buffer with samples until it is not empty
     for i in range(len(sample_buffer) - 1):
         sample_buffer = np.roll(sample_buffer, -1)
         sample_buffer[-1] = next(samples)
+
+        correlation.append(np.nan)
+        correlation_threshold_high.append(np.nan)
+        correlation_threshold_low.append(np.nan)
+        index += 1
+
+    LOGGER.debug("COR Index: %s", index)
 
     # Correlate samples with symbol
     for sample in samples:
@@ -61,8 +73,8 @@ def correlate_samples(samples, symbol):
 
 def detect_symbols(correlations, symbol_size, sync_word_size, corr_std_factor):
     """Detects if a correlation is greater than some threshold"""
+    global index
 
-    index = 0
     peak = None
     peak_index = None
     peak_mean = None
@@ -391,7 +403,10 @@ def get_samples_from_file(sample_file, src_period, dst_period):
                 else:
                     data.append([float(line[:-3]) for line in line.split()])
 
-            antenna1, antenna2, antenna3 = zip(*data)
+            antenna1, antenna2, antenna3 = map(pd.Series, zip(*data))
+            # print("Number of NaN values:", np.isnan(antenna1).sum())
+
+            antenna1 = antenna1.interpolate()
             return antenna1
 
     else:
@@ -430,7 +445,7 @@ def main(id_, folder, params):
         symbol, state = signal.max_len_seq(params['max_len_seq'])
     elif 'symbol' in params:
         symbol = np.array(params['symbol'])
-    LOGGER.debug("Symbol: %s", symbol)
+    LOGGER.debug("Symbol: %s (%s)", symbol, len(symbol))
 
     # Sync word parameters
     sync_word = np.array(params['sync_word'])
@@ -457,7 +472,8 @@ def main(id_, folder, params):
     sample_factor = int(sample_factor)
 
     global CORR_BUFFER_SIZE
-    CORR_BUFFER_SIZE = sample_factor * 15
+    # CORR_BUFFER_SIZE = sample_factor * 15
+    CORR_BUFFER_SIZE = 300
 
     # Generate the samples (simulated or through a file)
     if 'sample_file' in params:
@@ -513,13 +529,14 @@ def main(id_, folder, params):
                 expected.append(np.repeat(symbol, sample_factor))
         expected = np.concatenate(expected)
 
-        fig, (ax1, ax3) = plt.subplots(2, 1, figsize=(8,4))
+        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(8,4))
 
         # Plot the raw samples
         ax1.plot(samples)
 
         # Plot the expected symbol sequence
-        # ax2.plot(expected)
+        ax2.plot(expected)
+        ax2.set_xlim(ax1.get_xlim())
 
         scatter_data = [(x, y) for x, y, event in events if event == 'detected_peak_2']
         if scatter_data:
@@ -548,6 +565,7 @@ def main(id_, folder, params):
         # plt.legend()
         plt.tight_layout()
         plt.savefig(f'decoded_signal-{id_}.pdf')
+        plt.savefig(f'decoded_signal-{id_}.png')
 
     return result
 
