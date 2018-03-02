@@ -4,6 +4,7 @@ import itertools
 import multiprocessing
 from pathlib import Path
 
+import arrow
 import click
 import matplotlib
 matplotlib.use('agg')
@@ -331,7 +332,6 @@ def test_ap_wl_remote(remote, name):
     time_results = ssh_stderr.read().decode().split('\n')[0]
     re_result = re.search("(\\d+)m (\\d+.\\d+)s", time_results)
     run_time = int(re_result.group(1)) * 60 + float(re_result.group(2))
-    print(f'Run time: {run_time}')
 
     # Get samples
     ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command('cat data.out')
@@ -348,6 +348,91 @@ def test_ap_wl_remote(remote, name):
 
     print('Processing samples...')
     process_wl_samples(samples, name, run_time)
+
+
+@cli.command()
+@click.argument('remote', nargs=1)
+@click.argument('name', nargs=1)
+def test_ap_wl_remote_timing(remote, name):
+    import paramiko
+    import re
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.connect(remote, username='root')
+
+    # wl_command = "wl phy_rxiqest -r 1 -s 15"
+    wl_command = "date -Iseconds >> time.out; wl phy_rxiqest -r 1 -s 15"
+    command = f"time sh -c 'for i in `seq 1 1000`; do {wl_command} >> data.out; done'"
+
+    # Make sure old samples are deleted
+    print('Removing old data file...')
+    ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command('rm data.out; rm time.out')
+    ssh_stdout.read()
+
+    print('Collect samples...')
+    ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command(command)
+    time_results = ssh_stderr.read().decode().split('\n')[0]
+    re_result = re.search("(\\d+)m (\\d+.\\d+)s", time_results)
+    run_time = int(re_result.group(1)) * 60 + float(re_result.group(2))
+
+    # Get samples
+    ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command('cat data.out')
+    raw_samples = ssh_stdout.read()
+    samples = raw_samples.decode().split('\n')
+
+    print(f'Run time: {run_time} ({run_time / len(samples)})')
+
+    # Save samples for later
+    with open(f'{name}-data.log', 'wb') as f:
+        f.write(raw_samples)
+
+    # Get times
+    ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command('cat time.out')
+    raw_times = ssh_stdout.read()
+    times = raw_times.decode().strip().split('\n')
+
+    # Save times for later
+    with open(f'{name}-times.log', 'wb') as f:
+        f.write(raw_times)
+
+    # Delete samples
+    ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command('rm data.out; rm time.out')
+    ssh_stdout.read()
+
+    print('Processing samples and times...')
+    def process_data(data):
+        if '-' not in data:
+            return [np.nan, np.nan, np.nan]
+
+        return [float(d[:-3]) for d in data.split()]
+
+    times = [arrow.get(t) for t in times]
+    print(f"Date run time: {times[-1] - times[0]}")
+
+    data = (line.strip() for line in samples)  # Take off new lines
+    data = (process_data(d) for d in data)
+
+    ys1, ys2, ys3 = zip(*data)
+
+    samples_collected = len(ys1)
+    xs = np.linspace(0, run_time, num=samples_collected)
+
+    fig = plt.figure(figsize=(8,4))
+    ax1 = fig.add_subplot(211)
+    ax2 = fig.add_subplot(212)
+
+    ax1.plot(xs, ys1, '.-')
+    ax2.plot([t.datetime for t in times])
+
+    # ax1.set_xlim(1, 2)
+
+    ax1.set_ylabel('Noise (dBm)')
+    ax2.set_ylabel('Time')
+
+    plt.tight_layout()
+    plt.savefig(f'wl_timing-{name}.png')
+    plt.savefig(f'wl_timing-{name}.pdf')
+    plt.close(fig)
 
 
 @cli.command()
