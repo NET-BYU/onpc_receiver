@@ -102,27 +102,32 @@ def detect_symbols(correlations, symbol_size, sync_word_size, corr_std_factor):
 
         # Only if the peak is maintained for a whole symbol size will it be considered a symbol
         if peak_index is not None and index >= (peak_index + symbol_size - 1):
-            LOGGER.debug("DETECT Found a bit: %s !!!!!!!!!!", peak)
-            events.append((peak_index, peak, 'detected_bit'))
-            yield peak - peak_mean
-            peak = None
-            peak_index = None
-            # Don't reset peak_mean because it is used later...
-
-            LOGGER.debug("DETECT Looking for 2 bit of sync word")
-
-            # Since we have already looked ahead a whole symbol_size, the next
-            # correlation should be our symbol.
-            corr = next(correlations)
-            index += 1
-            correlation.append(corr)
-            correlation_threshold_high.append(np.nan)
-            correlation_threshold_low.append(np.nan)
-            events.append((index, corr, 'detected_bit'))
-            LOGGER.debug("DETECT Bit 2: %s", corr)
-            yield corr - corr_buffer.mean()
-
             try:
+                LOGGER.debug("DETECT Found a bit: %s !!!!!!!!!!", peak)
+                events.append((peak_index, peak, 'detected_bit'))
+                yield peak - peak_mean
+                peak = None
+                peak_index = None
+                # Don't reset peak_mean because it is used later...
+
+                if sync_word_size == 1:
+                    # We are all done with finding this sync word
+                    continue
+
+                LOGGER.debug("DETECT Looking for 2 bit of sync word")
+
+                # Since we have already looked ahead a whole symbol_size, the next
+                # correlation should be our symbol.
+                corr = next(correlations)
+                index += 1
+                correlation.append(corr)
+                correlation_threshold_high.append(np.nan)
+                correlation_threshold_low.append(np.nan)
+                events.append((index, corr, 'detected_bit'))
+                LOGGER.debug("DETECT Bit 2: %s", corr)
+                yield corr - corr_buffer.mean()
+
+
                 for i in range(sync_word_size - 2):
                     LOGGER.debug("DETECT Looking for %s bit of sync word", i + 2)
                     temp_corr_buffer = []
@@ -232,7 +237,7 @@ def decode_signal(samples, symbol, sync_word, sync_word_fuzz, corr_std_factor):
     packets = get_packet(bits, sync_word, sync_word_fuzz)
 
     for packet in packets:
-        return True
+        yield True
 
 
 def downsample(samples, amount=1):
@@ -347,33 +352,52 @@ def load_data(file_name):
         return new_data
 
 
-def get_samples_from_file(file_name, src_period, dst_period):
-    data = load_data(file_name)
+def get_samples_from_file(sample_file, src_period, dst_period):
+    if sample_file['type'] == 'spectrum analyzer':
+        data = load_data(sample_file['name'])
 
-    if len(data) > 1:
-        LOGGER.warning("File contains multiple captures. Selecting the first one.")
-    data = data[0]
+        if len(data) > 1:
+            LOGGER.warning("File contains multiple captures. Selecting the first one.")
+        data = data[0]
 
-    factor = (dst_period / src_period).to_base_units()
-    if factor % 1 != 0:
-        LOGGER.error("Source and destination sample period must be evenly divisible: %s / %s = %s",
-                     dst_period,
-                     src_period,
-                     factor)
+        factor = (dst_period / src_period).to_base_units()
+        if factor % 1 != 0:
+            LOGGER.error("Source and destination sample period must be evenly divisible: %s / %s = %s",
+                         dst_period,
+                         src_period,
+                         factor)
+            exit()
+        factor = int(factor)
+
+        # Get magnitude and convert to power
+        power_data = np.abs(data) ** 2
+
+        # Downsample source to destination
+        power_data =  np.array([power_data[i:i+factor].mean()
+                                for i in range(0, len(power_data), factor)])
+
+        # Convert to dBm
+        power_data = 10.*np.log10(power_data)
+
+        return power_data
+
+    elif sample_file['type'] == 'wl':
+        with open(sample_file['name']) as f:
+            data = []
+            for line in f:
+                line = line.strip()
+                if '-' not in line:
+                    data.append([np.nan, np.nan, np.nan])
+                else:
+                    data.append([float(line[:-3]) for line in line.split()])
+
+            antenna1, antenna2, antenna3 = zip(*data)
+            return antenna1
+
+    else:
+        LOGGER.error("Unknown sample file type: %s", sample_file['type'])
         exit()
-    factor = int(factor)
 
-    # Get magnitude and convert to power
-    power_data = np.abs(data) ** 2
-
-    # Downsample source to destination
-    power_data =  np.array([power_data[i:i+factor].mean()
-                            for i in range(0, len(power_data), factor)])
-
-    # Convert to dBm
-    power_data = 10.*np.log10(power_data)
-
-    return power_data
 
 
 def main(id_, folder, params):
@@ -477,48 +501,53 @@ def main(id_, folder, params):
 
     LOGGER.debug("Starting...")
     result = decode_signal(samples, np.repeat(symbol, sample_factor), sync_word, sync_word_fuzz, corr_std_factor)
+    result = list(result)
     LOGGER.debug("Done...")
 
     if params.get('graph', False):
-        fig = plt.figure(figsize=(8,4))
-        ax1 = fig.add_subplot(211)
+        expected = []
+        for bit in sync_word:
+            if bit == 0:
+                expected.append(np.repeat(symbol, sample_factor) ^ 1)
+            else:
+                expected.append(np.repeat(symbol, sample_factor))
+        expected = np.concatenate(expected)
+
+        fig, (ax1, ax3) = plt.subplots(2, 1, figsize=(8,4))
+
+        # Plot the raw samples
         ax1.plot(samples)
 
-        ax2 = fig.add_subplot(212)
+        # Plot the expected symbol sequence
+        # ax2.plot(expected)
 
         scatter_data = [(x, y) for x, y, event in events if event == 'detected_peak_2']
         if scatter_data:
-            ax2.scatter(*zip(*scatter_data),
+            ax3.scatter(*zip(*scatter_data),
                         marker='x',
                         color='grey')
 
         scatter_data = [(x, y) for x, y, event in events if event == 'detected_peak']
         if scatter_data:
-            ax2.scatter(*zip(*scatter_data),
+            ax3.scatter(*zip(*scatter_data),
                         marker='x',
                         color='yellow')
 
         scatter_data = [(x, y) for x, y, event in events if event == 'detected_bit']
         if scatter_data:
-            ax2.scatter(*zip(*scatter_data),
+            ax3.scatter(*zip(*scatter_data),
                         marker='x',
                         color='red')
 
-        ax2.plot(correlation_threshold_high, color='green', label='upper threshold')
-        ax2.plot(correlation_threshold_low, color='orange', label='lower threshold')
-        ax2.plot(correlation, label='correlation')
+        ax3.plot(correlation_threshold_high, color='green', label='upper threshold')
+        ax3.plot(correlation_threshold_low, color='orange', label='lower threshold')
+        ax3.plot(correlation, label='correlation')
 
-        ax2.set_xlim(0, len(samples))
+        ax3.set_xlim(ax1.get_xlim())
 
-        plt.legend()
+        # plt.legend()
         plt.tight_layout()
         plt.savefig(f'decoded_signal-{id_}.pdf')
-
-    #     fig = plt.figure(figsize=(8,3))
-    #     ax3 = fig.add_subplot(111)
-    #     ax3.plot(np.array(correlation))
-    #     plt.tight_layout()
-    #     plt.savefig('corr.pdf')
 
     return result
 
@@ -529,10 +558,9 @@ if __name__ == '__main__':
 
     @click.command()
     @click.argument('config_file', type=click.File('r'))
-    @click.option('--sample_file', default=None)
     @click.option('--log/--no-log', default=None)
     @click.option('--graph/--no-graph', default=False)
-    def cli(config_file, sample_file, log, graph):
+    def cli(config_file, log, graph):
         config = yaml.load(config_file)
         config['command_line'] = True
         config['graph'] = graph
@@ -541,15 +569,12 @@ if __name__ == '__main__':
         if log is not None:
             config['logging_output'] = log
 
-        if sample_file is not None:
-            config['sample_file'] = sample_file
-
         result = main(id_=__name__,
                       folder=None,
                       params=config)
 
         if result:
-            print("Success!!!")
+            print(f"Success!!! ({result})")
         else:
             print("Didn't find data")
 
