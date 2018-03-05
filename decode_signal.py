@@ -38,7 +38,6 @@ ureg = UnitRegistry()
 
 def correlate_samples(samples, symbol):
     """Multiples a buffer of samples by a symbol"""
-    global index
 
     # Create buffer
     sample_buffer = np.zeros(len(symbol))
@@ -49,13 +48,6 @@ def correlate_samples(samples, symbol):
     for i in range(len(sample_buffer) - 1):
         sample_buffer = np.roll(sample_buffer, -1)
         sample_buffer[-1] = next(samples)
-
-        correlation.append(np.nan)
-        correlation_threshold_high.append(np.nan)
-        correlation_threshold_low.append(np.nan)
-        index += 1
-
-    LOGGER.debug("COR Index: %s", index)
 
     # Correlate samples with symbol
     for sample in samples:
@@ -176,7 +168,9 @@ def detect_symbols(correlations, symbol_size, sync_word_size, corr_std_factor):
                 continue
 
         # If the correlation value is higher than one of the thresholds
-        if corr_threshold_low > corr_buffer[-1] or corr_buffer[-1] > corr_threshold_high:
+        # if corr_threshold_low > corr_buffer[-1] or corr_buffer[-1] > corr_threshold_high:
+        # We don't need to check the low threshold because we are only sending a 1
+        if corr_buffer[-1] > corr_threshold_high:
             corr_mean = corr_buffer.mean()
 
             # If we don't have a peak or if the peak is greater than the current peak
@@ -457,15 +451,15 @@ def main(id_, folder, params):
 
     # Sampling timing parameters
     sample_period = ureg(params['destination_sample_period'])
-    on_off_period = ureg(params['on_off_period'])
-    if on_off_period < sample_period:
-        LOGGER.error("Sample period must be smaller than transmission period")
+    chip_time = ureg(params['chip_time'])
+    if chip_time < sample_period:
+        LOGGER.error("Sample period must be smaller than chip time")
         exit()
 
-    sample_factor = on_off_period / sample_period
+    sample_factor = chip_time / sample_period
     if sample_factor % 1 != 0:
         LOGGER.error("Sample period and on/off period must be evenly divisible: %s / %s = %s",
-                     on_off_period,
+                     chip_time,
                      sample_period,
                      sample_factor)
         exit()
@@ -532,11 +526,14 @@ def main(id_, folder, params):
         fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(8,4))
 
         # Plot the raw samples
-        ax1.plot(samples)
+        ax1.plot(np.arange(len(samples)) * sample_period, samples)
+        ax1.set_xlabel('Time (ms)')
+        print(len(samples) * sample_period)
 
         # Plot the expected symbol sequence
-        ax2.plot(expected)
+        ax2.plot(np.arange(len(expected)) * sample_period, expected)
         ax2.set_xlim(ax1.get_xlim())
+        ax2.set_xlabel('Time (ms)')
 
         scatter_data = [(x, y) for x, y, event in events if event == 'detected_peak_2']
         if scatter_data:
@@ -556,11 +553,12 @@ def main(id_, folder, params):
                         marker='x',
                         color='red')
 
-        ax3.plot(correlation_threshold_high, color='green', label='upper threshold')
-        ax3.plot(correlation_threshold_low, color='orange', label='lower threshold')
-        ax3.plot(correlation, label='correlation')
+        ax3.plot(np.arange(len(correlation_threshold_high)) * sample_period, correlation_threshold_high, color='green', label='upper threshold')
+        # ax3.plot(correlation_threshold_low, color='orange', label='lower threshold')
+        ax3.plot(np.arange(len(correlation)) * sample_period, correlation, label='correlation')
 
         ax3.set_xlim(ax1.get_xlim())
+        ax3.set_xlabel('Time (ms)')
 
         # plt.legend()
         plt.tight_layout()
