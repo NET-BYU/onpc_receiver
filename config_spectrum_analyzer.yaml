@@ -1,14 +1,9 @@
-max_len_seq: 4
-# symbol: [1, -1, -1, 1]
+symbol: [1, 1, 1, 1, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0]
 
-sync_word: [1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 0]
-sync_word_fuzz: 3
-
-noise:
-  mu: -90
-  sigma: 5.3322
-
-signal: -85
+# sync_word: [1]
+# sync_word: [1, 0]
+sync_word: [1, 0, 1, 1]
+sync_word_fuzz: 0
 
 correlation_std_threshold: 4
 
@@ -16,6 +11,10 @@ quantization: 0
 
 source_sample_period: 20 ns
 destination_sample_period: 1 us
-transmission_period: 700 us
+on_off_period: 700 us
 
 logging_output: no
+
+sample_file:
+  name: /Users/philipbl/Desktop/onpc_data/SAVED-2018.02.23.12.09.00.000.npy
+  type: spectrum analyzer
