@@ -1,1 +1,5 @@
 tests*
+wl_params_results
+*.pdf
+*.png
+data/
