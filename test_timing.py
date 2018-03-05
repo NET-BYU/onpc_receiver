@@ -317,8 +317,9 @@ def test_ap_wl_remote(remote, name):
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(remote, username='root')
 
+    num_samples = 7000
     wl_command = "wl phy_rxiqest -r 1 -s 15"
-    command = f"time sh -c 'for i in `seq 1 1000`; do {wl_command} >> data.out; done'"
+    command = f"time sh -c 'for i in `seq 1 {num_samples}`; do {wl_command} >> data.out; done'"
 
     # name += f'-{wl_command}'
 
@@ -336,7 +337,9 @@ def test_ap_wl_remote(remote, name):
     # Get samples
     ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command('cat data.out')
     raw_samples = ssh_stdout.read()
-    samples = raw_samples.decode().split('\n')
+    samples = raw_samples.decode().strip().split('\n')
+
+    print(f'Run time: {run_time} ({run_time}/{len(samples)} = {run_time / len(samples)})')
 
     # Save samples for later
     with open(f'{name}.log', 'wb') as f:
