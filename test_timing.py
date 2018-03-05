@@ -307,51 +307,6 @@ def test_ap_wl(sample_file, total_time):
     process_wl_samples(sample_file, Path(sample_file.name).stem, total_time)
 
 
-@cli.command()
-@click.argument('remote', nargs=1)
-@click.argument('name', nargs=1)
-def test_ap_wl_remote(remote, name):
-    import paramiko
-    import re
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.connect(remote, username='root')
-
-    num_samples = 7000
-    wl_command = "wl phy_rxiqest -r 1 -s 15"
-    command = f"time sh -c 'for i in `seq 1 {num_samples}`; do {wl_command} >> data.out; done'"
-
-    # name += f'-{wl_command}'
-
-    # Make sure old samples are deleted
-    print('Removing old data file...')
-    ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command('rm data.out')
-    ssh_stdout.read()
-
-    print('Collect samples...')
-    ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command(command)
-    time_results = ssh_stderr.read().decode().split('\n')[0]
-    re_result = re.search("(\\d+)m (\\d+.\\d+)s", time_results)
-    run_time = int(re_result.group(1)) * 60 + float(re_result.group(2))
-
-    # Get samples
-    ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command('cat data.out')
-    raw_samples = ssh_stdout.read()
-    samples = raw_samples.decode().strip().split('\n')
-
-    print(f'Run time: {run_time} ({run_time}/{len(samples)} = {run_time / len(samples)})')
-
-    # Save samples for later
-    with open(f'{name}.log', 'wb') as f:
-        f.write(raw_samples)
-
-    # Delete samples
-    ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command('rm data.out')
-    ssh_stdout.read()
-
-    print('Processing samples...')
-    process_wl_samples(samples, name, run_time)
-
 
 @cli.command()
 @click.argument('remote', nargs=1)
