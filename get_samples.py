@@ -1,3 +1,6 @@
+import time
+import json
+
 import click
 import matplotlib
 matplotlib.use('agg')
@@ -5,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-def process_wl_samples(samples, name, total_time):
+def process_wl_samples(samples):
     def process_data(data):
         if '-' not in data:
             return [np.nan, np.nan, np.nan]
@@ -15,8 +18,11 @@ def process_wl_samples(samples, name, total_time):
     data = (line.strip() for line in samples)  # Take off new lines
     data = (process_data(d) for d in data)
 
-    ys1, ys2, ys3 = zip(*data)
+    return list(data)
 
+
+def graph(data, name, total_time):
+    ys1, ys2, ys3 = zip(*data)
     samples_collected = len(ys1)
     xs = np.linspace(0, total_time, num=samples_collected)
 
@@ -64,6 +70,7 @@ def get_samples(remote, name, num_samples):
     ssh_stdout.read()
 
     print('Collect samples...')
+    now = time.time()
     ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command(command)
     time_results = ssh_stderr.read().decode().split('\n')[0]
     re_result = re.search("(\\d+)m (\\d+.\\d+)s", time_results)
@@ -76,16 +83,23 @@ def get_samples(remote, name, num_samples):
 
     print(f'Run time: {run_time} ({run_time}/{len(samples)} = {run_time / len(samples)})')
 
-    # Save samples for later
-    with open(f'{name}.log', 'wb') as f:
-        f.write(raw_samples)
-
     # Delete samples
     ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command('rm data.out')
     ssh_stdout.read()
 
     print('Processing samples...')
-    process_wl_samples(samples, name, run_time)
+    samples = process_wl_samples(samples)
+
+    # Save samples for later
+    with open(f'{name}.json', 'w') as f:
+        json.dump({'name': name,
+                   'capture_time': now,
+                   'run_time': run_time,
+                   'command': wl_command,
+                   'count': num_samples,
+                   'samples': samples}, f)
+
+    graph(samples, name, run_time)
 
 
 if __name__ == '__main__':

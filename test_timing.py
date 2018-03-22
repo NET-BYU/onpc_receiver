@@ -3,6 +3,7 @@ import functools
 import itertools
 import multiprocessing
 from pathlib import Path
+import time
 
 import arrow
 import click
@@ -307,7 +308,6 @@ def test_ap_wl(sample_file, total_time):
     process_wl_samples(sample_file, Path(sample_file.name).stem, total_time)
 
 
-
 @cli.command()
 @click.argument('remote', nargs=1)
 @click.argument('name', nargs=1)
@@ -391,6 +391,53 @@ def test_ap_wl_remote_timing(remote, name):
     plt.savefig(f'wl_timing-{name}.png')
     plt.savefig(f'wl_timing-{name}.pdf')
     plt.close(fig)
+
+
+@cli.command()
+@click.argument('remote', nargs=1)
+@click.option('--num_samples', default=1000)
+@click.option('--num_runs', default=5)
+def test_ap_wl_sample_time(remote, num_samples, num_runs):
+    import paramiko
+    import re
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.connect(remote, username='root')
+
+    wl_command = "wl phy_rxiqest -r 1 -s 15"
+    command = f"time sh -c 'for i in `seq 1 {num_samples}`; do {wl_command} >> data.out; done'"
+
+    run_results = []
+    for i in range(num_runs):
+        print(f"\n############ RUN {i+1}")
+        # print('Removing old data file...')
+        ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command('rm data.out')
+        ssh_stdout.read()
+
+        # print('Collect samples...')
+        ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command(command)
+        time_results = ssh_stderr.read().decode().split('\n')[0]
+        re_result = re.search("(\\d+)m (\\d+.\\d+)s", time_results)
+        run_time = int(re_result.group(1)) * 60 + float(re_result.group(2))
+
+        run_results.append(run_time)
+        print(f'Run time: {run_time} s')
+        print(f'Time per sample: {run_time / num_samples} s ({run_time}/{num_samples})')
+
+        # print('Removing data file...')
+        ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command('rm data.out')
+        ssh_stdout.read()
+
+        # Give some time to let things settle
+        time.sleep(1)
+
+    run_results = np.array(run_results)
+    run_results = run_results / num_samples  # Convert from total time to time per sample
+    print("\n\n################ Results (Time per sample)")
+    print(f"Mean: {run_results.mean() * 1000} ms")
+    print(f"Median: {np.median(run_results) * 1000} ms")
+    print(f"Std: {run_results.std() * 1000} ms")
+
 
 
 @cli.command()
