@@ -105,89 +105,12 @@ def detect_symbols(correlations, symbol_size, sync_word_size, corr_std_factor):
         correlation_threshold_low.append(corr_threshold_low)
         # bits.append(None)
 
-        # Only if the peak is maintained for a whole symbol size will it be considered a symbol
-        if peak_index is not None and index >= (peak_index + symbol_size - 1):
-            try:
-                LOGGER.debug("DETECT Found a bit: %s !!!!!!!!!!", peak)
-                events.append((peak_index, peak, 'detected_bit'))
-                yield peak - peak_mean
-                peak = None
-                peak_index = None
-                # Don't reset peak_mean because it is used later...
-
-                if sync_word_size == 1:
-                    # We are all done with finding this sync word
-                    continue
-
-                LOGGER.debug("DETECT Looking for 2 bit of sync word")
-
-                # Since we have already looked ahead a whole symbol_size, the next
-                # correlation should be our symbol.
-                corr = next(correlations)
-                index += 1
-                correlation.append(corr)
-                correlation_threshold_high.append(np.nan)
-                correlation_threshold_low.append(np.nan)
-                events.append((index, corr, 'detected_bit'))
-                LOGGER.debug("DETECT Bit 2: %s", corr)
-                yield corr - corr_buffer.mean()
-
-
-                for i in range(sync_word_size - 2):
-                    LOGGER.debug("DETECT Looking for %s bit of sync word", i + 2)
-                    temp_corr_buffer = []
-                    for _ in range(symbol_size):
-                        corr = next(correlations)
-                        temp_corr_buffer.append(corr)
-                        index += 1
-                        correlation.append(corr)
-                        correlation_threshold_high.append(np.nan)
-                        correlation_threshold_low.append(np.nan)
-                    events.append((index, corr, 'detected_bit'))
-                    LOGGER.debug("DETECT Bit %s: %s", i + 3, corr)
-                    yield corr - np.array([temp_corr_buffer]).mean()
-
-                # Found the sync word, keep going!
-                for i in range(DATA_SIZE):
-                    LOGGER.debug("DETECT Looking for %s bit of data", i + 1)
-                    temp_corr_buffer = []
-                    for _ in range(symbol_size):
-                        corr = next(correlations)
-                        temp_corr_buffer.append(corr)
-                        index += 1
-                        correlation.append(corr)
-                        correlation_threshold_high.append(np.nan)
-                        correlation_threshold_low.append(np.nan)
-                    events.append((index, corr, 'detected_bit'))
-                    LOGGER.debug("DETECT Bit %s: %s", i + 1, corr)
-                    yield corr - np.array([temp_corr_buffer]).mean()
-            except ValueError:
-                # Our consumer is letting us know that it can't find the sync word.
-                # Must have been a false alarm, go back to looking for symbols.
-                LOGGER.debug("DETECT Give up trying to find bits")
-                yield None  # Needed to restart generator that threw exception
-                continue
-
         # If the correlation value is higher than one of the thresholds
-        # if corr_threshold_low > corr_buffer[-1] or corr_buffer[-1] > corr_threshold_high:
         # We don't need to check the low threshold because we are only sending a 1
         if corr_buffer[-1] > corr_threshold_high:
-            corr_mean = corr_buffer.mean()
-
-            # If we don't have a peak or if the peak is greater than the current peak
-            if peak is None or abs(corr_buffer[-1] - corr_mean) > abs(peak - corr_mean):
-                peak = corr_buffer[-1]
-                peak_index = index
-                peak_mean = corr_mean
-                events.append((peak_index, peak, 'detected_peak'))
-                LOGGER.debug("DETECT New peak %s !!!!!!", peak)
-
-        # If we already have a peak and the current correlation value is greater than that peak
-        if peak is not None and abs(corr_buffer[-1] - peak_mean) > abs(peak - peak_mean):
-            peak = corr_buffer[-1]
-            peak_index = index
-            events.append((peak_index, peak, 'detected_peak_2'))
-            LOGGER.debug("DETECT New peak %s !!!!!!", peak)
+            events.append((index, corr_buffer[-1], 'detected_peak'))
+            LOGGER.debug("DETECT Found a symbol!!!!!!")
+            yield 1
 
 
 def bit_decision(symbols):
