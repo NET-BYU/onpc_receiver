@@ -1,5 +1,6 @@
 from collections import deque
 import itertools
+import json
 import logging
 from math import log10
 import random
@@ -357,56 +358,77 @@ def load_data(file_name):
 
         return new_data
 
+def resample(samples, sample_time, chip_time, sample_factor):
+    sample_time = sample_time * ureg.s  # Convert to seconds
+    # See how many samples should have been collected during sample time
+    num_samples = (sample_time / (chip_time / sample_factor)).to_base_units()
+    num_samples = round(num_samples.magnitude)
 
-def get_samples_from_file(sample_file, src_period, dst_period):
-    if sample_file['type'] == 'spectrum analyzer':
-        data = load_data(sample_file['name'])
+    new_samples = signal.resample(samples, num_samples)
+    new_samples[new_samples < samples.min()] = samples.min()
 
-        if len(data) > 1:
-            LOGGER.warning("File contains multiple captures. Selecting the first one.")
-        data = data[0]
+    sample_period = sample_time / len(new_samples)
+    return new_samples, sample_period
 
-        factor = (dst_period / src_period).to_base_units()
-        if factor % 1 != 0:
-            LOGGER.error("Source and destination sample period must be evenly divisible: %s / %s = %s",
-                         dst_period,
-                         src_period,
-                         factor)
-            exit()
-        factor = int(factor)
 
-        # Get magnitude and convert to power
-        power_data = np.abs(data) ** 2
-
-        # Downsample source to destination
-        power_data =  np.array([power_data[i:i+factor].mean()
-                                for i in range(0, len(power_data), factor)])
-
-        # Convert to dBm
-        power_data = 10.*np.log10(power_data)
-
-        return power_data
-
-    elif sample_file['type'] == 'wl':
-        with open(sample_file['name']) as f:
-            data = []
-            for line in f:
-                line = line.strip()
-                if '-' not in line:
-                    data.append([np.nan, np.nan, np.nan])
-                else:
-                    data.append([float(line[:-3]) for line in line.split()])
-
-            antenna1, antenna2, antenna3 = map(pd.Series, zip(*data))
-            # print("Number of NaN values:", np.isnan(antenna1).sum())
-
-            antenna1 = antenna1.interpolate()
-            return antenna1
-
-    else:
+def get_samples_from_wl_file(sample_file, chip_time, sample_factor):
+    if sample_file['type'] != 'wl':
         LOGGER.error("Unknown sample file type: %s", sample_file['type'])
         exit()
 
+    with open(sample_file['name']) as f:
+        data = json.load(f)
+
+    antenna1, antenna2, antenna3 = map(pd.Series, zip(*data['samples']))
+    # print("Number of NaN values:", np.isnan(antenna1).sum())
+    samples = antenna1.interpolate()
+
+    LOGGER.warn("Reading sample file:")
+    LOGGER.warn("\tRun time: %s s (%s ms)", data['run_time'], 1000 * data['run_time'] / len(samples))
+    LOGGER.warn("\tChip time: %s", chip_time)
+    LOGGER.warn("\tSample factor: %s", sample_factor)
+
+    new_samples, sample_period = resample(samples,
+                                          data['run_time'],
+                                          chip_time,
+                                          sample_factor)
+
+    LOGGER.warn("\tNew sample period: %s", sample_period.to(ureg.ms))
+
+    return new_samples, sample_period
+
+
+def get_samples_from_spectrum_file(sample_file, src_period, dst_period):
+    if sample_file['type'] != 'spectrum analyzer':
+        LOGGER.error("Unknown sample file type: %s", sample_file['type'])
+        exit()
+
+    data = load_data(sample_file['name'])
+
+    if len(data) > 1:
+        LOGGER.warning("File contains multiple captures. Selecting the first one.")
+    data = data[0]
+
+    factor = (dst_period / src_period).to_base_units()
+    if factor % 1 != 0:
+        LOGGER.error("Source and destination sample period must be evenly divisible: %s / %s = %s",
+                     dst_period,
+                     src_period,
+                     factor)
+        exit()
+    factor = int(factor)
+
+    # Get magnitude and convert to power
+    power_data = np.abs(data) ** 2
+
+    # Downsample source to destination
+    power_data =  np.array([power_data[i:i+factor].mean()
+                            for i in range(0, len(power_data), factor)])
+
+    # Convert to dBm
+    power_data = 10.*np.log10(power_data)
+
+    return power_data
 
 
 def main(id_, folder, params):
@@ -449,62 +471,73 @@ def main(id_, folder, params):
     # data = np.array([1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1])
     data = np.array([])
 
-    # Sampling timing parameters
-    sample_period = ureg(params['destination_sample_period'])
-    chip_time = ureg(params['chip_time'])
-    if chip_time < sample_period:
-        LOGGER.error("Sample period must be smaller than chip time")
-        exit()
-
-    sample_factor = chip_time / sample_period
-    if sample_factor % 1 != 0:
-        LOGGER.error("Sample period and on/off period must be evenly divisible: %s / %s = %s",
-                     chip_time,
-                     sample_period,
-                     sample_factor)
-        exit()
-    sample_factor = int(sample_factor)
-
     global CORR_BUFFER_SIZE
     # CORR_BUFFER_SIZE = sample_factor * 15
     CORR_BUFFER_SIZE = 300
 
-    # Generate the samples (simulated or through a file)
-    if 'sample_file' in params:
-        # Resolve source and destination sample rates
-        source_sample_period = ureg(params['source_sample_period'])
+    if 'sample_file' in params and params['sample_file']['type'] == 'wl':
+        # Don't bother with dealing with the sample period.
+        # We will get that from the file.
 
-        samples = get_samples_from_file(params['sample_file'],
-                                        source_sample_period,
-                                        sample_period)
+        chip_time = ureg(params['chip_time'])
+        sample_factor = params['sample_factor']
+
+        samples, sample_period = get_samples_from_wl_file(params['sample_file'],
+                                                          chip_time,
+                                                          sample_factor)
     else:
-        seed = params.get('seed', random.randrange(sys.maxsize))
-        LOGGER.warning("Seed is: %s", seed)
-        rng = random.Random(seed)
-
-        # Transmission timing parameters
-        transmission_time = ureg(params['transmit_time'])
-        samples_per_transmission =  transmission_time / sample_period
-        if samples_per_transmission % 1 != 0:
-            LOGGER.error("Sample period and transmission time must be evenly divisible: %s / %s = %s",
-                         transmission_time,
-                         sample_period,
-                         samples_per_transmission)
+        # Sampling timing parameters
+        sample_period = ureg(params['destination_sample_period'])
+        chip_time = ureg(params['chip_time'])
+        if chip_time < sample_period:
+            LOGGER.error("Sample period must be smaller than chip time")
             exit()
-        samples_per_transmission = int(samples_per_transmission)
 
-        # Take care of carrier sensing
-        if params.get('carrier_sensing'):
-            cs = params['carrier_sensing']
-            cs['sigma'] = (ureg(cs['sigma']) / sample_period).magnitude
-            cs['mu'] = (ureg(cs['mu']) / sample_period).magnitude
+        sample_factor = chip_time / sample_period
+        if sample_factor % 1 != 0:
+            LOGGER.error("Sample period and on/off period must be evenly divisible: %s / %s = %s",
+                         chip_time,
+                         sample_period,
+                         sample_factor)
+            exit()
+        sample_factor = int(sample_factor)
 
-        samples = create_samples(symbol, sync_word, data, rng, sample_factor, samples_per_transmission,
-                                 signal_params=params['signal'],
-                                 noise_params=params['noise'],
-                                 quantization=params.get('quantization'),
-                                 cs_params=params.get('carrier_sensing', {'mu': 0, 'sigma': 0}))
-        samples = list(samples)
+        # Generate the samples (simulated or through a file)
+        if 'sample_file' in params:
+            # Resolve source and destination sample rates
+            source_sample_period = ureg(params['source_sample_period'])
+
+            samples = get_samples_from_spectrum_file(params['sample_file'],
+                                            source_sample_period,
+                                            sample_period)
+        else:
+            seed = params.get('seed', random.randrange(sys.maxsize))
+            LOGGER.warning("Seed is: %s", seed)
+            rng = random.Random(seed)
+
+            # Transmission timing parameters
+            transmission_time = ureg(params['transmit_time'])
+            samples_per_transmission =  transmission_time / sample_period
+            if samples_per_transmission % 1 != 0:
+                LOGGER.error("Sample period and transmission time must be evenly divisible: %s / %s = %s",
+                             transmission_time,
+                             sample_period,
+                             samples_per_transmission)
+                exit()
+            samples_per_transmission = int(samples_per_transmission)
+
+            # Take care of carrier sensing
+            if params.get('carrier_sensing'):
+                cs = params['carrier_sensing']
+                cs['sigma'] = (ureg(cs['sigma']) / sample_period).magnitude
+                cs['mu'] = (ureg(cs['mu']) / sample_period).magnitude
+
+            samples = create_samples(symbol, sync_word, data, rng, sample_factor, samples_per_transmission,
+                                     signal_params=params['signal'],
+                                     noise_params=params['noise'],
+                                     quantization=params.get('quantization'),
+                                     cs_params=params.get('carrier_sensing', {'mu': 0, 'sigma': 0}))
+            samples = list(samples)
 
     # Correlation std dev threshold
     corr_std_factor = params['correlation_std_threshold']
