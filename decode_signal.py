@@ -479,33 +479,36 @@ def main(id_, folder, params):
                 expected.append(np.repeat(symbol, sample_factor))
         expected = np.concatenate(expected)
 
-        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(8,4))
+        fig, (ax1, ax3) = plt.subplots(2, 1, figsize=(8,4))
 
         # Plot the raw samples
         ax1.plot(np.arange(len(samples)) * sample_period, samples)
         ax1.set_xlabel('Time (ms)')
         print(len(samples) * sample_period)
 
-        # Plot the expected symbol sequence
-        ax2.plot(np.arange(len(expected)) * sample_period, expected)
-        ax2.set_xlim(ax1.get_xlim())
-        ax2.set_xlabel('Time (ms)')
+        # # Plot the expected symbol sequence
+        # ax2.plot(np.arange(len(expected)) * sample_period, expected)
+        # ax2.set_xlim(ax1.get_xlim())
+        # ax2.set_xlabel('Time (ms)')
 
         scatter_data = [(x, y) for x, y, event in events if event == 'detected_peak_2']
         if scatter_data:
-            ax3.scatter(*zip(*scatter_data),
+            x, y = zip(*scatter_data)
+            ax3.scatter(x * sample_period, y,
                         marker='x',
                         color='grey')
 
         scatter_data = [(x, y) for x, y, event in events if event == 'detected_peak']
         if scatter_data:
-            ax3.scatter(*zip(*scatter_data),
+            x, y = zip(*scatter_data)
+            ax3.scatter(x * sample_period, y,
                         marker='x',
                         color='yellow')
 
         scatter_data = [(x, y) for x, y, event in events if event == 'detected_bit']
         if scatter_data:
-            ax3.scatter(*zip(*scatter_data),
+            x, y = zip(*scatter_data)
+            ax3.scatter(x * sample_period, y,
                         marker='x',
                         color='red')
 
