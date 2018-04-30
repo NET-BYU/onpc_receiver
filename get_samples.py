@@ -32,10 +32,12 @@ def graph(data, name, total_time):
     ax3 = fig.add_subplot(313)
 
     ax1.plot(xs, ys1, '.-')
-    ax2.plot(xs, ys2)
-    ax3.plot(xs, ys3)
+    ax2.plot(xs, ys2, '.-')
+    ax3.plot(xs, ys3, '.-')
 
     # ax1.set_xlim(1, 2)
+    ax2.set_ylim(ax1.get_ylim())
+    ax3.set_ylim(ax1.get_ylim())
 
     ax1.set_ylabel('Noise (dBm)')
     ax2.set_ylabel('Noise (dBm)')
@@ -57,7 +59,7 @@ def get_samples(remote, name, num_samples):
     import re
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.connect(remote, username='root')
+    ssh.connect(remote, username='root', timeout=10)
 
     wl_command = "wl phy_rxiqest -r 1 -s 15"
     command = f"time sh -c 'for i in `seq 1 {num_samples}`; do {wl_command} >> data.out; done'"

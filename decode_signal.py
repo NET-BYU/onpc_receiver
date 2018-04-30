@@ -522,7 +522,7 @@ def main(id_, folder, params):
         # plt.legend()
         plt.tight_layout()
         plt.savefig(f'decoded_signal-{id_}.pdf')
-        plt.savefig(f'decoded_signal-{id_}.png')
+        plt.savefig(f'decoded_signal-{id_}.png', dpi=600)
 
     return result
 
