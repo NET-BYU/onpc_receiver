@@ -512,7 +512,7 @@ def main(id_, folder, params):
         ax3.plot(np.arange(len(correlation)) * sample_period, correlation, label='correlation')
 
         ax3.set_xlim(ax1.get_xlim())
-        ax3.set_xlabel('Time (ms)')
+        ax3.set_xlabel('Time (s)')
 
         # plt.legend()
         plt.tight_layout()
