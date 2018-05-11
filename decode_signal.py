@@ -7,9 +7,6 @@ import random
 import sys
 import time
 
-import matplotlib
-matplotlib.use('agg')
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from pint import UnitRegistry
@@ -465,7 +462,7 @@ def main(id_, folder, params):
     result = list(result)
     LOGGER.debug("Done...")
 
-    if params.get('graph', False):
+    if params.get('graph', False) or params.get('interactive', False):
         expected = []
         for bit in sync_word:
             if bit == 0:
@@ -473,6 +470,12 @@ def main(id_, folder, params):
             else:
                 expected.append(np.repeat(symbol, sample_factor))
         expected = np.concatenate(expected)
+
+        if not params.get('interactive', False):
+            import matplotlib
+            matplotlib.use('agg')
+
+        import matplotlib.pyplot as plt
 
         fig, (ax1, ax3) = plt.subplots(2, 1, figsize=(8,4))
 
@@ -516,8 +519,13 @@ def main(id_, folder, params):
 
         # plt.legend()
         plt.tight_layout()
-        plt.savefig(f'decoded_signal-{id_}.pdf')
-        plt.savefig(f'decoded_signal-{id_}.png', dpi=600)
+
+        if params.get('graph', False):
+            plt.savefig(f'decoded_signal-{id_}.pdf')
+            plt.savefig(f'decoded_signal-{id_}.png', dpi=600)
+
+        if params.get('interactive', False):
+            plt.show()
 
     return result
 
@@ -530,10 +538,12 @@ if __name__ == '__main__':
     @click.argument('config_file', type=click.File('r'))
     @click.option('--log/--no-log', default=None)
     @click.option('--graph/--no-graph', default=False)
-    def cli(config_file, log, graph):
+    @click.option('--interactive/--no-interactive', default=False)
+    def cli(config_file, log, graph, interactive):
         config = yaml.load(config_file)
         config['command_line'] = True
         config['graph'] = graph
+        config['interactive'] = interactive
 
         # If log has been set, then overwrite config
         if log is not None:
