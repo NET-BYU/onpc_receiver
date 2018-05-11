@@ -28,7 +28,6 @@ correlation_threshold = []
 correlation_threshold_high = []
 correlation_threshold_low = []
 events = []
-index = 0
 
 ureg = UnitRegistry()
 
@@ -66,11 +65,7 @@ def correlate_samples(samples, symbol):
 
 def detect_symbols(correlations, symbol_size, sync_word_size, corr_std_factor):
     """Detects if a correlation is greater than some threshold"""
-    global index
-
-    peak = None
-    peak_index = None
-    peak_mean = None
+    index = 0
 
     # Create buffer
     corr_buffer = np.zeros(CORR_BUFFER_SIZE)
