@@ -84,8 +84,8 @@ def detect_symbols(correlations, symbol_size, sync_word_size, corr_std_factor):
         corr_buffer = np.roll(corr_buffer, -1)
         corr_buffer[-1] = corr
 
-        corr_threshold_high = corr_buffer.mean() + corr_std_factor * corr_buffer.std()
-        corr_threshold_low = corr_buffer.mean() - corr_std_factor * corr_buffer.std()
+        corr_threshold_high = corr_buffer[:-10].mean() + corr_std_factor * corr_buffer[:-10].std()
+        corr_threshold_low = corr_buffer[:-10].mean() - corr_std_factor * corr_buffer[:-10].std()
 
         LOGGER.debug("DETECT Corr Buffer: \n%s", corr_buffer)
         LOGGER.debug("DETECT Mean: %s", corr_buffer.mean())
