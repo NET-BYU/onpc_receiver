@@ -3,6 +3,7 @@ import itertools
 import json
 import logging
 from math import log10
+from pathlib import Path
 import random
 import sys
 import time
@@ -16,7 +17,6 @@ import scipy.io as sio
 # logging.basicConfig(level=logging.DEBUG,
 #                     format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
 LOGGER = None
-CORR_BUFFER_SIZE = None
 DATA_SIZE = 0
 
 signals = []
@@ -33,7 +33,7 @@ ureg = UnitRegistry()
 # <-------------------|
 
 
-def correlate_samples(samples, symbol):
+def correlate_samples(samples, symbol, sample_factor):
     """Multiples a buffer of samples by a symbol"""
 
     # Create buffer
@@ -57,15 +57,38 @@ def correlate_samples(samples, symbol):
         result = (sample_buffer * symbol).sum()
         LOGGER.debug("COR Correlation: %s", result)
 
+        symbol_size = len(symbol) / sample_factor
+        num_ones = symbol_size // 2 * sample_factor
+
+        # Divide by the number of ones
+        result = result / np.sum(symbol == 1)
+
         yield result
 
 
-def detect_symbols(correlations, symbol_size, sync_word_size, corr_std_factor):
+def low_pass_filter(samples, filter_size=20):
+    # Create buffer
+    sample_buffer = np.zeros(filter_size)
+
+    # Build up buffer with samples until it is not empty
+    for i in range(len(sample_buffer) - 1):
+        sample_buffer = np.roll(sample_buffer, -1)
+        sample_buffer[-1] = next(samples)
+
+    # Run low pass filter
+    for sample in samples:
+        sample_buffer = np.roll(sample_buffer, -1)
+        sample_buffer[-1] = sample
+        yield sample_buffer.mean()
+        # yield np.median(sample_buffer)
+
+
+def detect_symbols(correlations, corr_buffer_size, symbol_size, sync_word_size, corr_std_factor):
     """Detects if a correlation is greater than some threshold"""
     index = 0
 
     # Create buffer
-    corr_buffer = np.zeros(CORR_BUFFER_SIZE)
+    corr_buffer = np.zeros(corr_buffer_size)
 
     # Build up buffer with correlations until it is not empty
     for i in range(len(corr_buffer) - 1):
@@ -149,12 +172,13 @@ def get_packet(bits, sync_word, fuzz):
             bits.throw(ValueError)
 
 
-def decode_signal(samples, symbol, sync_word, sync_word_fuzz, corr_std_factor):
+def decode_signal(samples, symbol, sample_factor, sync_word, sync_word_fuzz,
+                  corr_buffer_size, corr_std_factor, low_pass_filter_size):
     # samples = list(samples)
     # LOGGER.debug("DECODE Samples: %s\n", samples)
 
-    corr = correlate_samples(iter(samples), symbol)
-    symbols = detect_symbols(corr, len(symbol), len(sync_word), corr_std_factor)
+    corr = low_pass_filter(correlate_samples(iter(samples), symbol, sample_factor), low_pass_filter_size)
+    symbols = detect_symbols(corr, corr_buffer_size, len(symbol), len(sync_word), corr_std_factor)
     bits = bit_decision(symbols)
     packets = get_packet(bits, sync_word, sync_word_fuzz)
 
@@ -386,10 +410,6 @@ def main(id_, folder, params):
     # data = np.array([1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1])
     data = np.array([])
 
-    global CORR_BUFFER_SIZE
-    # CORR_BUFFER_SIZE = sample_factor * 15
-    CORR_BUFFER_SIZE = 300
-
     if 'sample_file' in params and params['sample_file']['type'] == 'wl':
         # Don't bother with dealing with the sample period.
         # We will get that from the file.
@@ -454,11 +474,15 @@ def main(id_, folder, params):
                                      cs_params=params.get('carrier_sensing', {'mu': 0, 'sigma': 0}))
             samples = list(samples)
 
-    # Correlation std dev threshold
-    corr_std_factor = params['correlation_std_threshold']
-
     LOGGER.debug("Starting...")
-    result = decode_signal(samples, np.repeat(symbol, sample_factor), sync_word, sync_word_fuzz, corr_std_factor)
+    result = decode_signal(samples,
+                           np.repeat(symbol, sample_factor),
+                           sample_factor,
+                           sync_word,
+                           sync_word_fuzz,
+                           params['correlation_buffer_size'],
+                           params['correlation_std_threshold'],
+                           params['low_pass_filter_size'])
     result = list(result)
     LOGGER.debug("Done...")
 
@@ -521,8 +545,13 @@ def main(id_, folder, params):
         plt.tight_layout()
 
         if params.get('graph', False):
-            plt.savefig(f'decoded_signal-{id_}.pdf')
-            plt.savefig(f'decoded_signal-{id_}.png', dpi=600)
+            if 'sample_file' not in params:
+                name = 'simulated'
+            else:
+                name = Path(params['sample_file']['name']).stem
+
+            plt.savefig(f'decoded_signal-{id_}-{name}.pdf')
+            plt.savefig(f'decoded_signal-{id_}-{name}.png', dpi=600)
 
         if params.get('interactive', False):
             plt.show()
@@ -539,11 +568,16 @@ if __name__ == '__main__':
     @click.option('--log/--no-log', default=None)
     @click.option('--graph/--no-graph', default=False)
     @click.option('--interactive/--no-interactive', default=False)
-    def cli(config_file, log, graph, interactive):
+    @click.option('--wl-sample-file')
+    def cli(config_file, log, graph, interactive, wl_sample_file):
         config = yaml.load(config_file)
         config['command_line'] = True
         config['graph'] = graph
         config['interactive'] = interactive
+
+        if wl_sample_file:
+            config['sample_file']['name'] = wl_sample_file
+            config['sample_file']['type'] = 'wl'
 
         # If log has been set, then overwrite config
         if log is not None:
