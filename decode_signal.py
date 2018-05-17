@@ -556,7 +556,7 @@ def main(id_, folder, params):
         if params.get('interactive', False):
             plt.show()
 
-    return result
+    return params, result
 
 
 if __name__ == '__main__':
@@ -583,9 +583,9 @@ if __name__ == '__main__':
         if log is not None:
             config['logging_output'] = log
 
-        result = main(id_=__name__,
-                      folder=None,
-                      params=config)
+        _, result = main(id_=__name__,
+                         folder=None,
+                         params=config)
 
         if result:
             print(f"Success!!! ({result})")
