@@ -49,7 +49,10 @@ def split_num_list(ctx, param, value):
     if value is None or value == '':
         return [None]
     try:
-        return [int(x) for x in value.split(',') if x]
+        try:
+            return [int(x) for x in value.split(',') if x]
+        except ValueError:
+            return [float(x) for x in value.split(',') if x]
     except ValueError:
         raise click.BadParameter('List must only contain numbers')
 
@@ -84,7 +87,7 @@ def cli():
 @cli.command(help="Run decode signal a certain number of times.")
 @click.argument('config_file', type=click.File('r'))
 @click.argument('num', type=click.INT)
-def run(config_file, num):
+def run_simulate(config_file, num):
     config = yaml.load(config_file)
     check_config(config)
     with concurrent.futures.ProcessPoolExecutor(max_workers=psutil.cpu_count()) as executor:
@@ -148,6 +151,56 @@ def analyze(graph):
     plt.legend()
     plt.tight_layout()
     plt.savefig('batch.pdf')
+
+
+@cli.command(help="Run ONPC on collected data different parameters")
+@click.argument('config_file', type=click.File('r'))
+@click.option('-d', '--data', multiple=True, help='Data file')
+@click.option('--low_pass_filter_size', callback=split_num_list)
+@click.option('--correlation_buffer_size', callback=split_num_list)
+@click.option('--correlation_std_threshold', callback=split_num_list)
+def run_data(config_file, data, low_pass_filter_size, correlation_buffer_size,
+             correlation_std_threshold):
+    import decode_signal
+
+    params = [data, low_pass_filter_size, correlation_buffer_size, correlation_std_threshold]
+    # params = [x for x in params if x is not None and x[0] is not None]
+    param_combinations = list(itertools.product(*params))
+
+    config = yaml.load(config_file)
+    results = []
+
+    with tqdm(total=len(param_combinations)) as pbar:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=psutil.cpu_count()) as executor:
+            future_to_param = {}
+            for index, param in enumerate(param_combinations):
+                current_config = dict(config)
+
+                if param[0] is not None:
+                    current_config['sample_file']['name'] = param[0]
+                    current_config['sample_file']['type'] = 'wl'
+
+                if param[1] is not None:
+                    current_config['low_pass_filter_size'] = param[1]
+
+                if param[2] is not None:
+                    current_config['correlation_buffer_size'] = param[2]
+
+                if param[3] is not None:
+                    current_config['correlation_std_threshold'] = param[3]
+
+                f = executor.submit(decode_signal.main, index, None, current_config)
+                future_to_param[f] = param
+
+            for future in concurrent.futures.as_completed(future_to_param):
+                param = future_to_param[future]
+                config, result = future.result()
+
+                results.append((result, param))
+                pbar.update()
+
+    for result, param in results:
+        print(param, len(result))
 
 
 if __name__ == '__main__':
