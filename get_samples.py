@@ -1,5 +1,7 @@
+import os
 import time
 import json
+import uuid
 
 import click
 import matplotlib
@@ -53,18 +55,25 @@ def graph(data, name, total_time):
 @click.command()
 @click.argument('remote', nargs=1)
 @click.argument('name', nargs=1)
+@click.option('--folder', type=click.Path())
 @click.option('--num_samples', default=7000)
-def get_samples(remote, name, num_samples):
+@click.option('--tap', default=None)
+@click.option('--distance', type=float, prompt=True)
+@click.option('--location', prompt=True)
+@click.option('--description', prompt=True)
+@click.option('--experiment_number', type=int, prompt=True)
+@click.option('--symbol-size', type=int, prompt=True)
+@click.option('--transmitting', type=bool, prompt=True)
+def get_samples(remote, name, folder, num_samples, tap, distance, location, description, experiment_number, symbol_size, transmitting):
     import paramiko
     import re
+
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(remote, username='root', timeout=10)
 
     wl_command = "wl phy_rxiqest -r 1 -s 15"
     command = f"time sh -c 'for i in `seq 1 {num_samples}`; do {wl_command} >> data.out; done'"
-
-    # name += f'-{wl_command}'
 
     # Make sure old samples are deleted
     print('Removing old data file...')
@@ -93,12 +102,20 @@ def get_samples(remote, name, num_samples):
     samples = process_wl_samples(samples)
 
     # Save samples for later
-    with open(f'{name}.json', 'w') as f:
+    file_name = str(uuid.uuid4()).replace('-', '') + '.json'
+    with open(os.path.join(folder, file_name), 'w') as f:
         json.dump({'name': name,
                    'capture_time': now,
                    'run_time': run_time,
                    'command': wl_command,
                    'count': num_samples,
+                   'distance': distance,
+                   'tap': tap,
+                   'location': location,
+                   'experiment_number': experiment_number,
+                   'description': description,
+                   'symbol_size': symbol_size,
+                   'transmitting': transmitting,
                    'samples': samples}, f)
 
     graph(samples, name, run_time)
