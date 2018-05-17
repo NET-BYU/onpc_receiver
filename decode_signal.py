@@ -505,7 +505,7 @@ def main(id_, folder, params):
 
         # Plot the raw samples
         ax1.plot(np.arange(len(samples)) * sample_period, samples)
-        ax1.set_xlabel('Time (ms)')
+        ax1.set_xlabel('Time (s)')
         print(len(samples) * sample_period)
 
         # # Plot the expected symbol sequence
