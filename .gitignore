@@ -3,3 +3,4 @@ wl_params_results
 *.pdf
 *.png
 data/
+collected_data/

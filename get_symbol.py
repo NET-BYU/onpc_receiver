@@ -38,19 +38,21 @@ def get_symbol(size, width, type, clipboard, taps):
 
     # Join it all up with new lines between lines
 
-
+    out = ""
     if type == 'c':
         symbol = '\n    '.join([' '.join(line) for line in lines])
-        out = f"// taps: {taps}\n"
+        out += f"// taps: {taps}\n"
+        out += f"// size: {symbol_size}\n"
         out += f"uint8_t symbol[{symbol_size}] = {{\n\t{symbol}\n}};"
     elif type == 'yaml':
         symbol = '\n         '.join([' '.join(line) for line in lines])
-        out = f"# taps: {taps}\n"
+        out += f"# taps: {taps}\n"
+        out += f"# size: {symbol_size}\n"
         out += f"symbol: [{symbol}]"
     elif type == 'plain':
-        out = str(list(symbol))
+        out += str(list(symbol))
     else:
-        out = "Unknown type!"
+        out += "Unknown type!"
 
     if not clipboard:
         print(out)

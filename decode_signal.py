@@ -8,6 +8,7 @@ import random
 import sys
 import time
 
+import attr
 import numpy as np
 import pandas as pd
 from pint import UnitRegistry
@@ -31,6 +32,17 @@ ureg = UnitRegistry()
 # Time:
 # old                now
 # <-------------------|
+
+@attr.s
+class Result(object):
+    samples = attr.ib()
+    sample_period = attr.ib()
+    detected_signal = attr.ib()
+    correlation = attr.ib()
+    correlation_threshold_high = attr.ib()
+    config = attr.ib()
+    param = None
+    metadata = None
 
 
 def correlate_samples(samples, symbol, sample_factor):
@@ -320,7 +332,14 @@ def get_samples_from_wl_file(sample_file, chip_time, sample_factor):
 
     antenna1, antenna2, antenna3 = map(pd.Series, zip(*data['samples']))
     # print("Number of NaN values:", np.isnan(antenna1).sum())
-    samples = antenna1.interpolate()
+
+    antenna1 = antenna1.interpolate()
+    antenna2 = antenna2.interpolate()
+    antenna3 = antenna3.interpolate()
+
+    # samples = antenna1.interpolate()
+    # samples = (antenna1 + antenna2 + antenna3) / 3
+    samples = np.maximum(antenna1, np.maximum(antenna2, antenna3))
 
     LOGGER.warn("Reading sample file:")
     LOGGER.warn("\tRun time: %s s (%s ms)", data['run_time'], 1000 * data['run_time'] / len(samples))
@@ -556,8 +575,12 @@ def main(id_, folder, params):
         if params.get('interactive', False):
             plt.show()
 
-    return params, result
-
+    return Result(samples=samples,
+                  sample_period=sample_period,
+                  correlation=correlation,
+                  correlation_threshold_high=correlation_threshold_high,
+                  detected_signal=events,
+                  config=params)
 
 if __name__ == '__main__':
     import click
@@ -583,12 +606,12 @@ if __name__ == '__main__':
         if log is not None:
             config['logging_output'] = log
 
-        _, result = main(id_=__name__,
-                         folder=None,
-                         params=config)
+        result = main(id_=__name__,
+                      folder=None,
+                      params=config)
 
-        if result:
-            print(f"Success!!! ({result})")
+        if result.detected_signal:
+            print(f"Success!!! ({result.detected_signal})")
         else:
             print("Didn't find data")
 
