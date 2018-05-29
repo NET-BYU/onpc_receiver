@@ -1,4 +1,5 @@
 from collections import deque
+import copy
 import itertools
 import json
 import logging
@@ -20,7 +21,6 @@ import scipy.io as sio
 LOGGER = None
 DATA_SIZE = 0
 
-signals = []
 correlation = []
 correlation_threshold = []
 correlation_threshold_high = []
@@ -505,6 +505,10 @@ def main(id_, folder, params):
     result = list(result)
     LOGGER.debug("Done...")
 
+    global correlation
+    global correlation_threshold_high
+    global events
+
     if params.get('graph', False) or params.get('interactive', False):
         expected = []
         for bit in sync_word:
@@ -575,12 +579,19 @@ def main(id_, folder, params):
         if params.get('interactive', False):
             plt.show()
 
-    return Result(samples=samples,
-                  sample_period=sample_period,
-                  correlation=correlation,
-                  correlation_threshold_high=correlation_threshold_high,
-                  detected_signal=events,
-                  config=params)
+    result = Result(samples=samples,
+                    sample_period=sample_period,
+                    correlation=copy.deepcopy(correlation),
+                    correlation_threshold_high=copy.deepcopy(correlation_threshold_high),
+                    detected_signal=copy.deepcopy(events),
+                    config=params)
+
+    # Clear out global state
+    correlation = []
+    correlation_threshold_high = []
+    events = []
+
+    return result
 
 if __name__ == '__main__':
     import click
