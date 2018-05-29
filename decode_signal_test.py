@@ -1,14 +1,20 @@
+import binascii
 import concurrent.futures
 import copy
+import hashlib
+import io
 import itertools
 import logging
 import logging.handlers
 import glob
 from operator import itemgetter
 import os
+import pickle
 import time
 
 import click
+from glom import glom
+from jinja2 import FileSystemLoader, Environment
 import json
 import matplotlib
 matplotlib.use('agg')
@@ -191,14 +197,122 @@ def create_graph(result, location):
     # plt.legend()
     plt.tight_layout()
 
-    name = f"{result.metadata['distance']}-{result.metadata['location']}-{result.metadata['experiment_number']}"
-    # plt.savefig(os.path.join(location, f'{name}.pdf'))
-    plt.savefig(os.path.join(location, f'{name}.png'), dpi=600)
+    if isinstance(location, str):
+        name = f"{result.metadata['distance']}-{result.metadata['location']}-{result.metadata['experiment_number']}"
+        # plt.savefig(os.path.join(location, f'{name}.pdf'))
+        plt.savefig(os.path.join(location, f'{name}.png'), dpi=600)
+    else:
+        # Treat location as file
+        plt.savefig(location, format='png')
+
+    plt.close(fig)
+
 
 
 def get_metadata(file):
     with open(file) as f:
         return json.load(f)
+
+
+def generate_graph(input):
+    graph_data = io.BytesIO()
+    graph = create_graph(input, graph_data)
+
+    data = binascii.b2a_base64(graph_data.getvalue(), newline=False)
+    return f"data:image/png;base64,{data.decode()}"
+
+
+def get_unique_id(input):
+    return input.metadata['file_name'].split('/')[-1].split('.')[0]
+
+
+def get_details(input):
+    return {'Run #': input.metadata['experiment_number'],
+            'Transmitting': input.metadata.get('transmitting', True),
+            'Run time': input.metadata['run_time'],
+            'Filename': input.metadata['file_name']}
+
+
+def get_symbol_groups(result):
+    detected_signal_index = [i for i, _, _ in result.detected_signal]
+    groups = list(get_consecutive_number_groups(detected_signal_index))
+    groups_first_value = np.array([g[0] for g in groups])
+    diffs_between_groups = np.diff(groups_first_value)
+
+    return groups, diffs_between_groups
+
+def get_symbol_summary(input):
+    groups, diffs_between_groups = get_symbol_groups(input)
+    str_out = io.StringIO()
+
+    for i, group in enumerate(groups):
+        str_out.write(f'{group}\n')
+        if i < len(diffs_between_groups):
+            str_out.write(f'  |\n')
+            str_out.write(f'  | {diffs_between_groups[i]}\n')
+            str_out.write(f'  |\n')
+            str_out.write(f'  v\n')
+
+    return str_out.getvalue()
+
+
+def get_result_score(input):
+    if not input.metadata.get('transmitting', True):
+        return {"Message": "Not transmitting"}
+
+    groups, diffs_between_groups = get_symbol_groups(input)
+
+    run_time = input.metadata['run_time']
+    chip_time = .011039
+    symbol_size = input.metadata.get('symbol_size', 1023)
+    symbol_time = chip_time * symbol_size
+
+    expected_received_symbols = int((run_time // symbol_time) - 1)
+
+    missed = 0
+    false_positive = 0
+    correct = 0
+
+    if len(groups) > 0:
+        correct += 1
+        first_group = groups[0]
+        missed += first_group[0] // 3000
+
+
+    for diff in diffs_between_groups:
+        if diff < 2500:
+            false_positive += 1
+        elif diff > 4000:
+            missed += (diff // 3000) - 1
+
+        correct += 1
+
+    return {"Total": expected_received_symbols,
+            "Correct": correct,
+            "False positive": false_positive,
+            "False negative": missed}
+
+
+def get_all_results_score(input):
+    result_scores = []
+    for result in input:
+        score = get_result_score(result)
+        if 'Total' in score:
+            result_scores.append(get_result_score(result))
+
+    return glom(result_scores, {'Total': (['Total'], sum),
+                                'Correct': (['Correct'], sum),
+                                'False positive': (['False positive'], sum),
+                                'False negative': (['False negative'], sum)})
+
+
+def get_hash(files):
+    m = hashlib.sha256()
+    for file in files:
+        with open(file) as f:
+            m.update(f.read().encode())
+
+    return m.hexdigest()
 
 
 @cli.command(help="Run ONPC on collected data different parameters")
@@ -208,97 +322,98 @@ def get_metadata(file):
 @click.option('--low_pass_filter_size', callback=split_num_list)
 @click.option('--correlation_buffer_size', callback=split_num_list)
 @click.option('--correlation_std_threshold', callback=split_num_list)
-@click.option('--graph/--no-graph')
+@click.option('--webpage/--no-webpage')
 def run_data(config_file, data, folder, low_pass_filter_size, correlation_buffer_size,
-             correlation_std_threshold, graph):
+             correlation_std_threshold, webpage):
     import decode_signal
+    cache_file = "cache.pkl"
 
     data_files = itertools.chain(data, *[glob.glob(os.path.join(f, '*.json')) for f in folder])
     data_files = sorted(set(data_files))
+    data_files_hash = get_hash(data_files)
 
-    params = (data_files, low_pass_filter_size, correlation_buffer_size, correlation_std_threshold)
-    # params = [x for x in params if x is not None and x[0] is not None]
-    param_combinations = list(itertools.product(*params))
+    # Try to load old cache
+    try:
+        with open(cache_file, 'rb') as f:
+            cached_data = pickle.load(f)
+            run = cached_data['hash'] != data_files_hash
+    except FileNotFoundError:
+        run = True
 
-    config = yaml.load(config_file)
-    results = []
+    if run:
+        print("Cache invalid... running again.")
+        params = (data_files, low_pass_filter_size, correlation_buffer_size, correlation_std_threshold)
+        # params = [x for x in params if x is not None and x[0] is not None]
+        param_combinations = list(itertools.product(*params))
 
-    with tqdm(total=len(param_combinations)) as pbar:
-        with concurrent.futures.ProcessPoolExecutor(max_workers=psutil.cpu_count()) as executor:
-            future_to_param = {}
-            for index, param in enumerate(param_combinations):
-                current_config = copy.deepcopy(config)
+        config = yaml.load(config_file)
+        results = []
 
-                if param[0] is not None:
-                    current_config['sample_file']['name'] = param[0]
-                    current_config['sample_file']['type'] = 'wl'
+        with tqdm(total=len(param_combinations)) as pbar:
+            with concurrent.futures.ProcessPoolExecutor(max_workers=psutil.cpu_count()) as executor:
+                future_to_param = {}
+                for index, param in enumerate(param_combinations):
+                    current_config = copy.deepcopy(config)
 
-                if param[1] is not None:
-                    current_config['low_pass_filter_size'] = param[1]
+                    if param[0] is not None:
+                        current_config['sample_file']['name'] = param[0]
+                        current_config['sample_file']['type'] = 'wl'
 
-                if param[2] is not None:
-                    current_config['correlation_buffer_size'] = param[2]
+                    if param[1] is not None:
+                        current_config['low_pass_filter_size'] = param[1]
 
-                if param[3] is not None:
-                    current_config['correlation_std_threshold'] = param[3]
+                    if param[2] is not None:
+                        current_config['correlation_buffer_size'] = param[2]
 
-                f = executor.submit(decode_signal.main, index, None, current_config)
-                future_to_param[f] = param
+                    if param[3] is not None:
+                        current_config['correlation_std_threshold'] = param[3]
 
-            for future in concurrent.futures.as_completed(future_to_param):
-                file_name = param[0]
-                metadata = get_metadata(file_name)
+                    f = executor.submit(decode_signal.main, index, None, current_config)
+                    future_to_param[f] = param
 
-                param = future_to_param[future]
-                result = future.result()
-                result.param = param
-                result.metadata = metadata
+                for future in concurrent.futures.as_completed(future_to_param):
+                    param = future_to_param[future]
 
-                results.append(result)
-                pbar.update()
+                    file_name = param[0]
+                    metadata = get_metadata(file_name)
+                    metadata['file_name'] = file_name
 
-    print()
+                    result = future.result()
+                    result.param = param
+                    result.metadata = metadata
 
-    # # Group by location, description, experiment number
-    # sorted_location_results = sorted(results, lambda x: (x.config['location'],
-    #                                                      x.config['description'],
-    #                                                      x.config['experiment_number'])
+                    results.append(result)
+                    pbar.update()
 
-    # for result in sorted_location_results:
-    #     print(result.config['location'])
+        # Save results to cache
+        with open(cache_file, 'wb') as f:
+            pickle.dump({'hash': data_files_hash, 'results': results}, f)
+    else:
+        print("Using cache.")
+        results = cached_data['results']
+
+    # Group by location, description, experiment number
+    sorted_location_results = sorted(results, key=lambda x: (x.metadata['location'],
+                                                             x.metadata['description'],
+                                                             x.metadata['experiment_number']))
 
 
-    for result in results:
-        # print(result)
 
-        if graph:
-            if not os.path.exists('graphs'):
-                os.makedirs('graphs')
-            create_graph(result, 'graphs')
+    if webpage:
+        env = Environment(loader=FileSystemLoader('templates'))
+        env.filters['generate_graph'] = generate_graph
+        env.filters['get_details'] = get_details
+        env.filters['get_symbol_summary'] = get_symbol_summary
+        env.filters['get_unique_id'] = get_unique_id
+        env.filters['get_result_score'] = get_result_score
+        env.filters['get_all_results_score'] = get_all_results_score
+        template = env.get_template('results.html')
 
-        detected_signal_index = [i for i, _, _ in result.detected_signal]
-        groups = list(get_consecutive_number_groups(detected_signal_index))
+        with open('onpc_results.html', 'w') as f:
+            f.write(template.render(results=sorted_location_results))
+    else:
+        print(get_all_results_score(sorted_location_results))
 
-        groups_first_value = np.array([g[0] for g in groups])
-        diffs_between_groups = np.diff(groups_first_value)
-
-        print('-' * 80)
-        print(f"Distance: {result.metadata['distance']}")
-        print(f"Location: {result.metadata['location']}")
-        print(f"Experiment #: {result.metadata['experiment_number']}")
-        print(f"Description: {result.metadata['description']}")
-        print()
-
-        for i, group in enumerate(groups):
-            print(group)
-            if i < len(diffs_between_groups):
-                print(f'  |')
-                print(f'  | {diffs_between_groups[i]}')
-                print(f'  |')
-                print(f'  v')
-
-        print()
-        print('-' * 80)
 
 if __name__ == '__main__':
     cli()
