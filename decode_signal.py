@@ -409,13 +409,13 @@ def get_hash(params):
 
 
 def main(id_, folder, params):
-    hash_file = os.path.join('cache', f'{get_hash(params)}.pkl')
+    # hash_file = os.path.join('cache', f'{get_hash(params)}.pkl')
 
-    try:
-        with open(hash_file, 'rb') as f:
-            return pickle.load(f)
-    except FileNotFoundError:
-        print("Unable to find in cache. Running...")
+    # try:
+    #     with open(hash_file, 'rb') as f:
+    #         return pickle.load(f)
+    # except FileNotFoundError:
+    #     print("Unable to find in cache. Running...")
 
     # Set up logging
     global LOGGER
@@ -619,8 +619,8 @@ def main(id_, folder, params):
     events = []
 
 
-    with open(hash_file, 'wb') as f:
-        pickle.dump(result, f)
+    # with open(hash_file, 'wb') as f:
+    #     pickle.dump(result, f)
 
 
     return result
