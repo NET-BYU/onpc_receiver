@@ -82,7 +82,7 @@ sync_word_fuzz: 0
 
 correlation_std_threshold: 4.5
 correlation_buffer_size: 600
-low_pass_filter_size: 20
+low_pass_filter_size: 30
 
 quantization: 0
 

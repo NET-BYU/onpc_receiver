@@ -47,6 +47,20 @@ class Result(object):
     param = None
     metadata = None
 
+def filter_nearby_transmitters(samples):
+    mean = samples.mean()
+    std = samples.std()
+    # threshold = 1 * std + mean
+    threshold = np.percentile(samples, 30)
+
+    new_samples = samples.copy()
+    new_samples[new_samples > threshold] = threshold
+
+    print(threshold)
+    print(mean)
+    print(new_samples.mean())
+
+    return new_samples
 
 def correlate_samples(samples, symbol, sample_factor):
     """Multiples a buffer of samples by a symbol"""
@@ -521,6 +535,7 @@ def main(id_, folder, params):
             samples = list(samples)
 
     LOGGER.debug("Starting...")
+    samples = filter_nearby_transmitters(samples)
     result = decode_signal(samples,
                            np.repeat(symbol, sample_factor),
                            sample_factor,
@@ -554,9 +569,13 @@ def main(id_, folder, params):
         fig, (ax1, ax3) = plt.subplots(2, 1, figsize=(8,4))
 
         # Plot the raw samples
-        ax1.plot(np.arange(len(samples)) * sample_period, samples)
+        ax1.plot(np.arange(len(samples)) * sample_period, samples, '.')
         ax1.set_xlabel('Time (s)')
         print(len(samples) * sample_period)
+
+        # ax1.axhline(median, color='red')
+        # ax1.axhline(mean, color='green')
+        # ax1.axhline(mean + 2*std, color='green')
 
         # # Plot the expected symbol sequence
         # ax2.plot(np.arange(len(expected)) * sample_period, expected)
