@@ -1,10 +1,13 @@
 from collections import deque
 import copy
+from functools import lru_cache
 import itertools
 import json
 import logging
 from math import log10
+import os
 from pathlib import Path
+import pickle
 import random
 import sys
 import time
@@ -389,7 +392,31 @@ def get_samples_from_spectrum_file(sample_file, src_period, dst_period):
     return power_data
 
 
+def unfreeze(s):
+    if isinstance(s, frozenset):
+        return {key: unfreeze(value) for key, value in s}
+    return s
+
+def freeze(d):
+    if isinstance(d, dict):
+        return frozenset((key, freeze(value)) for key, value in d.items())
+    elif isinstance(d, list):
+        return tuple(freeze(value) for value in d)
+    return d
+
+def get_hash(params):
+    return hash(freeze(params))
+
+
 def main(id_, folder, params):
+    hash_file = os.path.join('cache', f'{get_hash(params)}.pkl')
+
+    try:
+        with open(hash_file, 'rb') as f:
+            return pickle.load(f)
+    except FileNotFoundError:
+        print("Unable to find in cache. Running...")
+
     # Set up logging
     global LOGGER
     LOGGER = logging.getLogger("{}".format(id_))
@@ -590,6 +617,11 @@ def main(id_, folder, params):
     correlation = []
     correlation_threshold_high = []
     events = []
+
+
+    with open(hash_file, 'wb') as f:
+        pickle.dump(result, f)
+
 
     return result
 

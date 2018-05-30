@@ -315,6 +315,14 @@ def get_hash(files):
     return m.hexdigest()
 
 
+def freeze(d):
+    if isinstance(d, dict):
+        return frozenset((key, freeze(value)) for key, value in d.items())
+    elif isinstance(d, list):
+        return tuple(freeze(value) for value in d)
+    return d
+
+
 @cli.command(help="Run ONPC on collected data different parameters")
 @click.argument('config_file', type=click.File('r'))
 @click.option('-d', '--data', multiple=True, help='Data file')
@@ -326,71 +334,70 @@ def get_hash(files):
 def run_data(config_file, data, folder, low_pass_filter_size, correlation_buffer_size,
              correlation_std_threshold, webpage):
     import decode_signal
-    cache_file = "cache.pkl"
+    # cache_file = "cache.pkl"
 
     data_files = itertools.chain(data, *[glob.glob(os.path.join(f, '*.json')) for f in folder])
     data_files = sorted(set(data_files))
     data_files_hash = get_hash(data_files)
 
-    # Try to load old cache
-    try:
-        with open(cache_file, 'rb') as f:
-            cached_data = pickle.load(f)
-            run = cached_data['hash'] != data_files_hash
-    except FileNotFoundError:
-        run = True
+    # # Try to load old cache
+    # try:
+    #     with open(cache_file, 'rb') as f:
+    #         cached_data = pickle.load(f)
+    #         run = cached_data['hash'] != data_files_hash
+    # except FileNotFoundError:
+    #     run = True
 
-    if run:
-        print("Cache invalid... running again.")
-        params = (data_files, low_pass_filter_size, correlation_buffer_size, correlation_std_threshold)
-        # params = [x for x in params if x is not None and x[0] is not None]
-        param_combinations = list(itertools.product(*params))
+    # print("Cache invalid... running again.")
+    params = (data_files, low_pass_filter_size, correlation_buffer_size, correlation_std_threshold)
+    # params = [x for x in params if x is not None and x[0] is not None]
+    param_combinations = list(itertools.product(*params))
 
-        config = yaml.load(config_file)
-        results = []
+    config = yaml.load(config_file)
+    results = []
 
-        with tqdm(total=len(param_combinations)) as pbar:
-            with concurrent.futures.ProcessPoolExecutor(max_workers=psutil.cpu_count()) as executor:
-                future_to_param = {}
-                for index, param in enumerate(param_combinations):
-                    current_config = copy.deepcopy(config)
+    with tqdm(total=len(param_combinations)) as pbar:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=psutil.cpu_count()) as executor:
+            future_to_param = {}
+            for index, param in enumerate(param_combinations):
+                current_config = copy.deepcopy(config)
 
-                    if param[0] is not None:
-                        current_config['sample_file']['name'] = param[0]
-                        current_config['sample_file']['type'] = 'wl'
+                if param[0] is not None:
+                    current_config['sample_file']['name'] = param[0]
+                    current_config['sample_file']['type'] = 'wl'
 
-                    if param[1] is not None:
-                        current_config['low_pass_filter_size'] = param[1]
+                if param[1] is not None:
+                    current_config['low_pass_filter_size'] = param[1]
 
-                    if param[2] is not None:
-                        current_config['correlation_buffer_size'] = param[2]
+                if param[2] is not None:
+                    current_config['correlation_buffer_size'] = param[2]
 
-                    if param[3] is not None:
-                        current_config['correlation_std_threshold'] = param[3]
+                if param[3] is not None:
+                    current_config['correlation_std_threshold'] = param[3]
 
-                    f = executor.submit(decode_signal.main, index, None, current_config)
-                    future_to_param[f] = param
+                f = executor.submit(decode_signal.main, index, None, current_config)
+                future_to_param[f] = param
 
-                for future in concurrent.futures.as_completed(future_to_param):
-                    param = future_to_param[future]
+            for future in concurrent.futures.as_completed(future_to_param):
+                param = future_to_param[future]
 
-                    file_name = param[0]
-                    metadata = get_metadata(file_name)
-                    metadata['file_name'] = file_name
+                file_name = param[0]
+                metadata = get_metadata(file_name)
+                metadata['file_name'] = file_name
 
-                    result = future.result()
-                    result.param = param
-                    result.metadata = metadata
+                result = future.result()
+                result.param = param
+                result.metadata = metadata
 
-                    results.append(result)
-                    pbar.update()
+                results.append(result)
+                pbar.update()
 
-        # Save results to cache
-        with open(cache_file, 'wb') as f:
-            pickle.dump({'hash': data_files_hash, 'results': results}, f)
-    else:
-        print("Using cache.")
-        results = cached_data['results']
+    #     # Save results to cache
+    #     with open(cache_file, 'wb') as f:
+    #         pickle.dump({'hash': data_files_hash, 'results': results}, f)
+    # else:
+    #     print("Using cache.")
+    #     results = cached_data['results']
 
     # Group by location, description, experiment number
     sorted_location_results = sorted(results, key=lambda x: (x.metadata['location'],
