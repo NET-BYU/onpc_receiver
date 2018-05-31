@@ -18,6 +18,7 @@ import pandas as pd
 from pint import UnitRegistry
 from scipy import signal
 import scipy.io as sio
+from scipy.stats import norm
 
 # logging.basicConfig(level=logging.DEBUG,
 #                     format='%(asctime)s:%(levelname)s:%(name)s:%(message)s')
@@ -50,15 +51,31 @@ class Result(object):
 def filter_nearby_transmitters(samples):
     mean = samples.mean()
     std = samples.std()
-    # threshold = 1 * std + mean
-    threshold = np.percentile(samples, 30)
+    threshold = np.percentile(samples, 10)
 
-    new_samples = samples.copy()
-    new_samples[new_samples > threshold] = threshold
+    new_samples = norm.cdf(samples, loc=threshold, scale=std)
+    new_samples = (new_samples * 2) - 1
 
-    print(threshold)
-    print(mean)
-    print(new_samples.mean())
+    # exit()
+
+
+    ###########################################
+    # Attempt to shift group of values down   #
+    ###########################################
+    # threshold = -90
+    # bound = 20
+    # new_samples = samples.copy()
+    # indexes = np.where(new_samples > threshold)[0]
+    # min_sample = new_samples.min()
+
+    # for index in indexes:
+    #     cluster_max = new_samples[index-bound:index+bound].max()
+    #     diff = cluster_max - -120
+    #     print(cluster_max, diff)
+    #     new_samples[index-bound:index+bound] = new_samples[index-bound:index+bound] - diff
+
+    # new_samples[new_samples < min_sample] = min_sample
+
 
     return new_samples
 
