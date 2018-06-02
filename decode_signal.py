@@ -53,8 +53,8 @@ def filter_nearby_transmitters(samples):
     std = samples.std()
     threshold = np.percentile(samples, 10)
 
-    new_samples = norm.cdf(samples, loc=threshold, scale=std)
-    new_samples = (new_samples * 2) - 1
+    new_samples = norm.cdf(samples, loc=threshold, scale=std * .7)
+    new_samples = (new_samples * 4) - 3
 
     # exit()
 
@@ -478,6 +478,8 @@ def main(id_, folder, params):
     elif 'symbol' in params:
         symbol = np.array(params['symbol'])
     LOGGER.debug("Symbol: %s (%s)", symbol, len(symbol))
+
+    symbol = symbol * 2 - 1
 
     # Sync word parameters
     sync_word = np.array(params['sync_word'])
