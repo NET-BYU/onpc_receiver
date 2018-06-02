@@ -39,6 +39,7 @@ ureg = UnitRegistry()
 
 @attr.s
 class Result(object):
+    original_samples = attr.ib()
     samples = attr.ib()
     sample_period = attr.ib()
     detected_signal = attr.ib()
@@ -554,6 +555,7 @@ def main(id_, folder, params):
             samples = list(samples)
 
     LOGGER.debug("Starting...")
+    original_samples = samples.copy()
     samples = filter_nearby_transmitters(samples)
     result = decode_signal(samples,
                            np.repeat(symbol, sample_factor),
@@ -585,12 +587,12 @@ def main(id_, folder, params):
 
         import matplotlib.pyplot as plt
 
-        fig, (ax1, ax3) = plt.subplots(2, 1, figsize=(8,4))
+        fig, (ax0, ax1, ax3) = plt.subplots(3, 1, figsize=(8,4), sharex=True)
+
+        ax0.plot(np.arange(len(original_samples)) * sample_period, original_samples, '.')
 
         # Plot the raw samples
         ax1.plot(np.arange(len(samples)) * sample_period, samples, '.')
-        ax1.set_xlabel('Time (s)')
-        print(len(samples) * sample_period)
 
         # ax1.axhline(median, color='red')
         # ax1.axhline(mean, color='green')
@@ -644,7 +646,8 @@ def main(id_, folder, params):
         if params.get('interactive', False):
             plt.show()
 
-    result = Result(samples=samples,
+    result = Result(original_samples=original_samples,
+                    samples=samples,
                     sample_period=sample_period,
                     correlation=copy.deepcopy(correlation),
                     correlation_threshold_high=copy.deepcopy(correlation_threshold_high),
