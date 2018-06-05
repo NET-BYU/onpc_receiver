@@ -366,9 +366,7 @@ def get_samples_from_wl_file(sample_file, chip_time, sample_factor):
     antenna2 = antenna2.interpolate()
     antenna3 = antenna3.interpolate()
 
-    # samples = antenna1.interpolate()
-    # samples = (antenna1 + antenna2 + antenna3) / 3
-    samples = np.maximum(antenna1, np.maximum(antenna2, antenna3))
+    samples = (antenna1 + antenna2 + antenna3) / 3
 
     LOGGER.warn("Reading sample file:")
     LOGGER.warn("\tRun time: %s s (%s ms)", data['run_time'], 1000 * data['run_time'] / len(samples))
