@@ -87,7 +87,7 @@ low_pass_filter_size: 30
 quantization: 0
 
 sample_factor: 3
-chip_time: 11.54 ms
+chip_time: 13.424 ms
 
 logging_output: no
 
