@@ -25,6 +25,7 @@ from scipy.stats import norm
 LOGGER = None
 DATA_SIZE = 0
 
+index = 0
 correlation = []
 correlation_threshold = []
 correlation_threshold_high = []
@@ -54,34 +55,15 @@ def filter_nearby_transmitters(samples):
     std = samples.std()
     threshold = np.percentile(samples, 10)
 
-    new_samples = norm.cdf(samples, loc=threshold, scale=std * .7)
-    new_samples = (new_samples * 4) - 3
+    filtered_samples = norm.cdf(samples, loc=threshold, scale=std * .7)
+    filtered_samples_shifted = (filtered_samples * 4) - 3
 
-    # exit()
+    return filtered_samples_shifted
 
-
-    ###########################################
-    # Attempt to shift group of values down   #
-    ###########################################
-    # threshold = -90
-    # bound = 20
-    # new_samples = samples.copy()
-    # indexes = np.where(new_samples > threshold)[0]
-    # min_sample = new_samples.min()
-
-    # for index in indexes:
-    #     cluster_max = new_samples[index-bound:index+bound].max()
-    #     diff = cluster_max - -120
-    #     print(cluster_max, diff)
-    #     new_samples[index-bound:index+bound] = new_samples[index-bound:index+bound] - diff
-
-    # new_samples[new_samples < min_sample] = min_sample
-
-
-    return new_samples
 
 def correlate_samples(samples, symbol, sample_factor):
     """Multiples a buffer of samples by a symbol"""
+    global index
 
     # Create buffer
     sample_buffer = np.zeros(len(symbol))
@@ -92,6 +74,11 @@ def correlate_samples(samples, symbol, sample_factor):
     for i in range(len(sample_buffer) - 1):
         sample_buffer = np.roll(sample_buffer, -1)
         sample_buffer[-1] = next(samples)
+
+        index += 1
+        correlation.append(np.nan)
+        correlation_threshold_high.append(np.nan)
+        correlation_threshold_low.append(np.nan)
 
     # Correlate samples with symbol
     for sample in samples:
@@ -114,6 +101,8 @@ def correlate_samples(samples, symbol, sample_factor):
 
 
 def low_pass_filter(samples, filter_size=20):
+    global index
+
     # Create buffer
     sample_buffer = np.zeros(filter_size)
 
@@ -121,6 +110,11 @@ def low_pass_filter(samples, filter_size=20):
     for i in range(len(sample_buffer) - 1):
         sample_buffer = np.roll(sample_buffer, -1)
         sample_buffer[-1] = next(samples)
+
+        index += 1
+        correlation.append(np.nan)
+        correlation_threshold_high.append(np.nan)
+        correlation_threshold_low.append(np.nan)
 
     # Run low pass filter
     for sample in samples:
@@ -132,7 +126,7 @@ def low_pass_filter(samples, filter_size=20):
 
 def detect_symbols(correlations, corr_buffer_size, symbol_size, sync_word_size, corr_std_factor):
     """Detects if a correlation is greater than some threshold"""
-    index = 0
+    global index
 
     # Create buffer
     corr_buffer = np.zeros(corr_buffer_size)
@@ -556,7 +550,11 @@ def main(id_, folder, params):
 
     LOGGER.debug("Starting...")
     original_samples = samples.copy()
-    samples = filter_nearby_transmitters(samples)
+
+    if params.get('filter', True):
+        print("Filtering nearby transmitters")
+        samples = filter_nearby_transmitters(samples)
+
     result = decode_signal(samples,
                            np.repeat(symbol, sample_factor),
                            sample_factor,
@@ -568,6 +566,7 @@ def main(id_, folder, params):
     result = list(result)
     LOGGER.debug("Done...")
 
+    global index
     global correlation
     global correlation_threshold_high
     global events
@@ -624,9 +623,9 @@ def main(id_, folder, params):
                         marker='x',
                         color='red')
 
-        ax3.plot(np.arange(len(correlation_threshold_high)) * sample_period, correlation_threshold_high, color='green', label='upper threshold')
+        ax3.plot(np.arange(len(correlation_threshold_high)) * sample_period, correlation_threshold_high, color='green', linewidth=1)
         # ax3.plot(correlation_threshold_low, color='orange', label='lower threshold')
-        ax3.plot(np.arange(len(correlation)) * sample_period, correlation, label='correlation')
+        ax3.plot(np.arange(len(correlation)) * sample_period, correlation, label='correlation', linewidth=1)
 
         ax3.set_xlim(ax1.get_xlim())
         ax3.set_xlabel('Time (s)')
@@ -655,6 +654,7 @@ def main(id_, folder, params):
                     config=params)
 
     # Clear out global state
+    index = 0
     correlation = []
     correlation_threshold_high = []
     events = []
