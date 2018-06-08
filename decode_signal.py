@@ -351,7 +351,7 @@ def resample(samples, sample_time, chip_time, sample_factor):
     return new_samples, sample_period
 
 
-def get_samples_from_wl_file(sample_file, chip_time, sample_factor):
+def get_samples_from_wl_file(sample_file, sample_factor):
     if sample_file['type'] != 'wl':
         LOGGER.error("Unknown sample file type: %s", sample_file['type'])
         exit()
@@ -359,6 +359,7 @@ def get_samples_from_wl_file(sample_file, chip_time, sample_factor):
     with open(sample_file['name']) as f:
         data = json.load(f)
 
+    chip_time = ureg(data['chip_time'])
     antenna1, antenna2, antenna3 = map(pd.Series, zip(*data['samples']))
     # print("Number of NaN values:", np.isnan(antenna1).sum())
 
@@ -486,11 +487,9 @@ def main(id_, folder, params):
         # Don't bother with dealing with the sample period.
         # We will get that from the file.
 
-        chip_time = ureg(params['chip_time'])
         sample_factor = params['sample_factor']
 
         samples, sample_period = get_samples_from_wl_file(params['sample_file'],
-                                                          chip_time,
                                                           sample_factor)
     else:
         # Sampling timing parameters
