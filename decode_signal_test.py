@@ -20,10 +20,13 @@ import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import numpy as np
+from pint import UnitRegistry
 from tqdm import tqdm
 import yaml
 import psutil
 
+
+ureg = UnitRegistry()
 
 
 def _run(config, num, executor):
@@ -162,22 +165,37 @@ def analyze(graph):
     plt.savefig('batch.pdf')
 
 
-def get_consecutive_number_groups(lst):
-    for k, g in itertools.groupby(enumerate(lst), lambda x: x[0]-x[1]):
-        yield list(map(itemgetter(1), g))
+def get_consecutive_number_groups(lst, tolerence=10):
+    groups = itertools.groupby(enumerate(lst), lambda x: x[0]-x[1])
+    prev = list(map(itemgetter(1), next(groups)[1]))
+
+    for k, g in groups:
+        current = list(map(itemgetter(1), g))
+
+        if current[0] - prev[-1] < tolerence:
+            prev.extend(current)
+            continue
+
+        yield prev
+        prev = current
+
+    yield prev
 
 def create_graph(result, location):
+    original_samples = result.original_samples
     samples = result.samples
     sample_period = result.sample_period
     detected_signal = result.detected_signal
     correlation = result.correlation
     correlation_threshold_high = result.correlation_threshold_high
 
-    fig, (ax1, ax3) = plt.subplots(2, 1, figsize=(8,4))
+    fig, (ax0, ax1, ax3) = plt.subplots(3, 1, figsize=(8,4), sharex=True)
+
+    ax0.plot(np.arange(len(original_samples)) * sample_period, original_samples, '.', markersize=.7)
+    ax0.set_xlabel('Time (s)')
 
     # Plot the raw samples
-    ax1.plot(np.arange(len(samples)) * sample_period, samples)
-    ax1.set_xlabel('Time (s)')
+    ax1.plot(np.arange(len(samples)) * sample_period, samples, '.', markersize=.7)
 
     scatter_data = [(x, y) for x, y, event in detected_signal if event == 'detected_peak']
     if scatter_data:
@@ -200,10 +218,10 @@ def create_graph(result, location):
     if isinstance(location, str):
         name = f"{result.metadata['distance']}-{result.metadata['location']}-{result.metadata['experiment_number']}"
         # plt.savefig(os.path.join(location, f'{name}.pdf'))
-        plt.savefig(os.path.join(location, f'{name}.png'), dpi=600)
+        plt.savefig(os.path.join(location, f'{name}.png'), dpi=300)
     else:
         # Treat location as file
-        plt.savefig(location, format='png')
+        plt.savefig(location, format='png', dpi=300)
 
     plt.close(fig)
 
@@ -236,6 +254,10 @@ def get_details(input):
 def get_symbol_groups(result):
     detected_signal_index = [i for i, _, _ in result.detected_signal]
     groups = list(get_consecutive_number_groups(detected_signal_index))
+
+    new_groups = []
+
+
     groups_first_value = np.array([g[0] for g in groups])
     diffs_between_groups = np.diff(groups_first_value)
 
@@ -257,53 +279,59 @@ def get_symbol_summary(input):
 
 
 def get_result_score(input):
-    if not input.metadata.get('transmitting', True):
-        return {"Message": "Not transmitting"}
+
 
     groups, diffs_between_groups = get_symbol_groups(input)
 
     run_time = input.metadata['run_time']
-    chip_time = .011039
+    chip_time = ureg(input.metadata['chip_time']).magnitude / 1e3
     symbol_size = input.metadata.get('symbol_size', 1023)
     symbol_time = chip_time * symbol_size
 
     expected_received_symbols = int((run_time // symbol_time) - 1)
+    # print(run_time, symbol_time, expected_received_symbols)
+    print(groups)
+    print(diffs_between_groups)
+    # print(input.sample_period)
+    # print(symbol_time)
+    # print(symbol_time / input.sample_period.magnitude)
+    # exit()
 
-    missed = 0
+    if not input.metadata.get('transmitting', True):
+        return {"Total": 0,
+                "Correct": 0,
+                "False positive": len(groups)}
+
     false_positive = 0
     correct = 0
 
     if len(groups) > 0:
+        # Assume that the first symbol is correct
         correct += 1
-        first_group = groups[0]
-        missed += first_group[0] // 3000
-
 
     for diff in diffs_between_groups:
-        if diff < 2500:
-            false_positive += 1
-        elif diff > 4000:
-            missed += (diff // 3000) - 1
+        time_diff = diff * input.sample_period.magnitude  # Convert from sample number diffs to time diffs
+        num_symbols = time_diff / symbol_time  # Number of symbols between groups
+        offset = abs(round(num_symbols) - num_symbols)
+        # print(f"Number of symbols: {num_symbols} ({offset})")
 
-        correct += 1
+        # If the offset is far enough away, then it is a false positive
+        if offset > .2:
+            false_positive += 1
+        else:
+            correct += 1
 
     return {"Total": expected_received_symbols,
             "Correct": correct,
-            "False positive": false_positive,
-            "False negative": missed}
+            "False positive": false_positive}
 
 
 def get_all_results_score(input):
-    result_scores = []
-    for result in input:
-        score = get_result_score(result)
-        if 'Total' in score:
-            result_scores.append(get_result_score(result))
+    result_scores = [get_result_score(result) for result in input]
 
     return glom(result_scores, {'Total': (['Total'], sum),
                                 'Correct': (['Correct'], sum),
-                                'False positive': (['False positive'], sum),
-                                'False negative': (['False negative'], sum)})
+                                'False positive': (['False positive'], sum)})
 
 
 def get_hash(files):
@@ -340,17 +368,7 @@ def run_data(config_file, data, folder, low_pass_filter_size, correlation_buffer
     data_files = sorted(set(data_files))
     data_files_hash = get_hash(data_files)
 
-    # # Try to load old cache
-    # try:
-    #     with open(cache_file, 'rb') as f:
-    #         cached_data = pickle.load(f)
-    #         run = cached_data['hash'] != data_files_hash
-    # except FileNotFoundError:
-    #     run = True
-
-    # print("Cache invalid... running again.")
     params = (data_files, low_pass_filter_size, correlation_buffer_size, correlation_std_threshold)
-    # params = [x for x in params if x is not None and x[0] is not None]
     param_combinations = list(itertools.product(*params))
 
     config = yaml.load(config_file)
@@ -404,8 +422,6 @@ def run_data(config_file, data, folder, low_pass_filter_size, correlation_buffer
                                                              x.metadata['description'],
                                                              x.metadata['experiment_number']))
 
-
-
     if webpage:
         env = Environment(loader=FileSystemLoader('templates'))
         env.filters['generate_graph'] = generate_graph
@@ -418,8 +434,8 @@ def run_data(config_file, data, folder, low_pass_filter_size, correlation_buffer
 
         with open('onpc_results.html', 'w') as f:
             f.write(template.render(results=sorted_location_results))
-    else:
-        print(get_all_results_score(sorted_location_results))
+
+    print(get_all_results_score(sorted_location_results))
 
 
 if __name__ == '__main__':
