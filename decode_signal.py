@@ -549,7 +549,7 @@ def main(id_, folder, params):
     original_samples = samples.copy()
 
     if params.get('filter', True):
-        print("Filtering nearby transmitters")
+        # print("Filtering nearby transmitters")
         samples = filter_nearby_transmitters(samples)
 
     result = decode_signal(samples,
@@ -585,10 +585,10 @@ def main(id_, folder, params):
 
         fig, (ax0, ax1, ax3) = plt.subplots(3, 1, figsize=(8,4), sharex=True)
 
-        ax0.plot(np.arange(len(original_samples)) * sample_period, original_samples, '.')
+        ax0.plot(np.arange(len(original_samples)) * sample_period, original_samples, '.', markersize=.7)
 
         # Plot the raw samples
-        ax1.plot(np.arange(len(samples)) * sample_period, samples, '.')
+        ax1.plot(np.arange(len(samples)) * sample_period, samples, '.', markersize=.7)
 
         # ax1.axhline(median, color='red')
         # ax1.axhline(mean, color='green')
