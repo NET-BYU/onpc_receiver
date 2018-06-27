@@ -124,6 +124,8 @@ def get_samples(remote, name, folder, num_samples, tap, distance, location,
 
     graph(samples, name, run_time)
 
+    print(file_name)
+
 
 if __name__ == '__main__':
     get_samples()
