@@ -55,6 +55,15 @@ def filter_nearby_transmitters(samples):
     std = samples.std()
     threshold = np.percentile(samples, 10)
 
+    # threshold =  -99.25
+    # std = 13.7438368521
+
+    # threshold = -99.4166666667
+    # std = 20.0348352445
+
+    print("threshold", threshold)
+    print("std", std)
+
     filtered_samples = norm.cdf(samples, loc=threshold, scale=std * .7)
     filtered_samples_shifted = (filtered_samples * 4) - 3
 
@@ -145,8 +154,8 @@ def detect_symbols(correlations, corr_buffer_size, symbol_size, sync_word_size, 
         corr_buffer = np.roll(corr_buffer, -1)
         corr_buffer[-1] = corr
 
-        corr_threshold_high = corr_buffer[:-10].mean() + corr_std_factor * corr_buffer[:-10].std()
-        corr_threshold_low = corr_buffer[:-10].mean() - corr_std_factor * corr_buffer[:-10].std()
+        corr_threshold_high = corr_buffer[:-100].mean() + corr_std_factor * corr_buffer[:-100].std()
+        corr_threshold_low = corr_buffer[:-100].mean() - corr_std_factor * corr_buffer[:-100].std()
 
         LOGGER.debug("DETECT Corr Buffer: \n%s", corr_buffer)
         LOGGER.debug("DETECT Mean: %s", corr_buffer.mean())
@@ -359,6 +368,9 @@ def get_samples_from_wl_file(sample_file, sample_factor):
     with open(sample_file['name']) as f:
         data = json.load(f)
 
+    print(data['location'])
+    print(data['description'])
+
     chip_time = ureg(data['chip_time'])
     antenna1, antenna2, antenna3 = map(pd.Series, zip(*data['samples']))
     # print("Number of NaN values:", np.isnan(antenna1).sum())
@@ -368,6 +380,7 @@ def get_samples_from_wl_file(sample_file, sample_factor):
     antenna3 = antenna3.interpolate()
 
     samples = (antenna1 + antenna2 + antenna3) / 3
+    # samples = antenna1
 
     LOGGER.warn("Reading sample file:")
     LOGGER.warn("\tRun time: %s s (%s ms)", data['run_time'], 1000 * data['run_time'] / len(samples))
@@ -546,6 +559,9 @@ def main(id_, folder, params):
             samples = list(samples)
 
     LOGGER.debug("Starting...")
+    ### TODO: Temporary!!!
+    # samples = samples[int(0 / sample_period.magnitude):int(150 / sample_period.magnitude)]
+
     original_samples = samples.copy()
 
     if params.get('filter', True):
@@ -562,6 +578,40 @@ def main(id_, folder, params):
                            params['low_pass_filter_size'])
     result = list(result)
     LOGGER.debug("Done...")
+
+
+    def calc_threshold(data):
+        ignore_values = 100
+
+        data = data[:-ignore_values]
+        return data.std() * params['correlation_std_threshold'] + data.mean()
+
+    def onpc(samples):
+        corr_samples = np.correlate(np.repeat(symbol, sample_factor), samples)
+        corr_samples = np.flip(corr_samples, 0)
+        corr_samples = pd.Series(corr_samples)
+
+        corr_samples = corr_samples / np.sum(symbol == 1)
+
+        # Low pass filter
+        corr_samples = corr_samples.rolling(window=30).mean()
+
+        threshold = corr_samples.rolling(window=600).apply(calc_threshold)
+
+        empty = np.empty(len(symbol) * sample_factor - 1)
+        empty[:] = np.nan
+
+        corr_samples = np.concatenate((empty, np.array(corr_samples)))
+        threshold = np.concatenate((empty, np.array(threshold)))
+
+        peak_indexes = np.where(corr_samples > threshold)[0]
+        ys = corr_samples[peak_indexes]
+        xs = peak_indexes
+
+        return corr_samples, threshold, zip(xs, ys)
+
+    test_samples, test_threshold, peaks  = onpc(samples)
+    test_samples_original, test_threshold_original, peaks_original  = onpc(original_samples)
 
     global index
     global correlation
@@ -583,7 +633,7 @@ def main(id_, folder, params):
 
         import matplotlib.pyplot as plt
 
-        fig, (ax0, ax1, ax3) = plt.subplots(3, 1, figsize=(8,4), sharex=True)
+        fig, (ax0, ax1, ax3, ax4, ax5) = plt.subplots(5, 1, figsize=(8,6), sharex=True)
 
         ax0.plot(np.arange(len(original_samples)) * sample_period, original_samples, '.', markersize=.7)
 
@@ -626,6 +676,20 @@ def main(id_, folder, params):
 
         ax3.set_xlim(ax1.get_xlim())
         ax3.set_xlabel('Time (s)')
+
+        ax4.plot(np.arange(len(test_threshold)) * sample_period, test_threshold, color='green', linewidth=1)
+        ax4.plot(np.arange(len(test_samples)) * sample_period, test_samples, linewidth=1)
+        xs, ys = zip(*peaks)
+        ax4.scatter(xs * sample_period, ys,
+                    marker='x',
+                    color='yellow')
+
+        ax5.plot(np.arange(len(test_threshold_original)) * sample_period, test_threshold_original, color='green', linewidth=1)
+        ax5.plot(np.arange(len(test_samples_original)) * sample_period, test_samples_original, linewidth=1)
+        xs, ys = zip(*peaks_original)
+        ax5.scatter(xs * sample_period, ys,
+                    marker='x',
+                    color='yellow')
 
         # plt.legend()
         plt.tight_layout()
