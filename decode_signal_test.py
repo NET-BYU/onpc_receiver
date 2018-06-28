@@ -290,8 +290,8 @@ def get_result_score(input):
 
     expected_received_symbols = int((run_time // symbol_time) - 1)
     # print(run_time, symbol_time, expected_received_symbols)
-    print(groups)
-    print(diffs_between_groups)
+    # print(groups)
+    # print(diffs_between_groups)
     # print(input.sample_period)
     # print(symbol_time)
     # print(symbol_time / input.sample_period.magnitude)
@@ -362,7 +362,6 @@ def freeze(d):
 def run_data(config_file, data, folder, low_pass_filter_size, correlation_buffer_size,
              correlation_std_threshold, webpage):
     import decode_signal
-    # cache_file = "cache.pkl"
 
     data_files = itertools.chain(data, *[glob.glob(os.path.join(f, '*.json')) for f in folder])
     data_files = sorted(set(data_files))
@@ -410,15 +409,8 @@ def run_data(config_file, data, folder, low_pass_filter_size, correlation_buffer
                 results.append(result)
                 pbar.update()
 
-    #     # Save results to cache
-    #     with open(cache_file, 'wb') as f:
-    #         pickle.dump({'hash': data_files_hash, 'results': results}, f)
-    # else:
-    #     print("Using cache.")
-    #     results = cached_data['results']
-
-    # Group by location, description, experiment number
-    sorted_location_results = sorted(results, key=lambda x: (x.metadata['location'],
+    sorted_location_results = sorted(results, key=lambda x: (*x.param,
+                                                             x.metadata['location'],
                                                              x.metadata['description'],
                                                              x.metadata['experiment_number']))
 
