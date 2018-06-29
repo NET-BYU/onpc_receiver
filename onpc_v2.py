@@ -17,26 +17,29 @@ ureg = pint.UnitRegistry()
 
 @attr.s
 class Result(object):
-    original_samples = attr.ib()
     samples = attr.ib()
-    sample_period = attr.ib()
-    detected_signal = attr.ib()
     correlation = attr.ib()
-    correlation_threshold_high = attr.ib()
-    param = attr.ib(default=None)
-    metadata = attr.ib(default=None)
+    threshold = attr.ib()
+    detected_signal = attr.ib()
+
+@attr.s
+class ExperimentResult(object):
+    original_result = attr.ib()
+    result = attr.ib()
+    sample_period = attr.ib()
+    metadata = attr.ib()
 
 
 @click.command()
 @click.argument('data_file', type=click.File('r'))
 @click.option('--lpf-size', default=30)
 @click.option('--threshold-size', default=600)
-@click.option('--threshold-ignore', default=100)
+@click.option('--threshold-lag', default=100)
 @click.option('--threshold-std', default=4.5)
 @click.option('--sample-factor', default=3)
 @click.option('--graph/--no-graph', default=True)
 @click.option('--interactive/-no-interactive', default=False)
-def main(data_file, lpf_size=30, threshold_size=600, threshold_ignore=100,
+def main(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
          threshold_std=4.5, sample_factor=3, graph=False, interactive=False):
 
     experiment_name = pathlib.Path(data_file.name).stem
@@ -50,13 +53,33 @@ def main(data_file, lpf_size=30, threshold_size=600, threshold_ignore=100,
 
     samples = limit_samples(raw_samples)
 
-    correlation, threshold = calculate_correlation(samples,
-                                                   symbol,
-                                                   sample_factor,
-                                                   lpf_size,
-                                                   threshold_size,
-                                                   threshold_std,
-                                                   threshold_ignore)
+    raw_result = decode_symbols(raw_samples, symbol, sample_factor, lpf_size,
+                                threshold_size, threshold_std, threshold_lag)
+
+    result = decode_symbols(samples, symbol, sample_factor, lpf_size,
+                            threshold_size, threshold_std, threshold_lag)
+
+    if graph:
+        graph_data(experiment_name, raw_result, result, sample_period,
+                   interactive)
+
+    return ExperimentResult(original_result=raw_result,
+                            result=result,
+                            sample_period=sample_period,
+                            metadata=experiment_data)
+
+
+def decode_symbols(samples, symbol, sample_factor, lpf_size, threshold_size,
+                   threshold_std, threshold_lag):
+    correlation = calculate_correlation(samples,
+                                        symbol,
+                                        sample_factor,
+                                        lpf_size)
+
+    threshold = calculate_threshold(correlation,
+                                    threshold_size,
+                                    threshold_std,
+                                    threshold_lag)
 
     peak_xs, peak_ys = find_peaks(correlation, threshold)
 
@@ -69,17 +92,10 @@ def main(data_file, lpf_size=30, threshold_size=600, threshold_ignore=100,
 
     peaks = list(zip(peak_xs, peak_ys))
 
-    if graph:
-        graph_data(experiment_name, raw_samples, samples, correlation,
-                   threshold, peaks, sample_period, interactive)
-
-    return Result(original_samples=raw_samples,
-                  samples=samples,
-                  sample_period=sample_period,
+    return Result(samples=samples,
                   correlation=correlation,
-                  correlation_threshold_high=threshold,
-                  detected_signal=peaks,
-                  metadata=experiment_data)
+                  threshold=threshold,
+                  detected_signal=peaks)
 
 
 def find_peaks(correlation, threshold):
@@ -90,12 +106,7 @@ def find_peaks(correlation, threshold):
     return peak_xs, peak_ys
 
 
-def calculate_correlation(samples, symbol, sample_factor, lpf_size,
-                          threshold_size, threshold_std, threshold_ignore):
-
-    def calc_threshold(data):
-        data = data[:-threshold_ignore]
-        return data.std() * threshold_std + data.mean()
+def calculate_correlation(samples, symbol, sample_factor, lpf_size):
 
     # Calculate correlation
     correlation = np.correlate(np.repeat(symbol, sample_factor), samples)
@@ -106,16 +117,33 @@ def calculate_correlation(samples, symbol, sample_factor, lpf_size,
     # Low pass filter
     correlation = correlation.rolling(window=lpf_size).mean()
 
-    # Calculate correlation
+    # correlation = signal.medfilt(correlation, 101)
+    # correlation = pd.Series(correlation)
+
+    return correlation
+
+
+def calculate_threshold(correlation, threshold_size, threshold_std, threshold_lag):
+    def calc_threshold(data):
+        data = data[:-threshold_lag]
+        return data.std() * threshold_std + data.mean()
+
     threshold = correlation.rolling(window=threshold_size).apply(
         calc_threshold)
 
-    return correlation, threshold
+    return threshold
 
 
 def limit_samples(raw_samples):
     std = raw_samples.std()
     threshold = np.percentile(raw_samples, 10)
+
+    # Overwrite calculated values
+    # std = 0.768194724106
+    # threshold = -98.8879846223
+
+    LOGGER.info("Std: %s", std)
+    LOGGER.info("Threshold: %s", threshold)
 
     samples = stats.norm.cdf(raw_samples, loc=threshold, scale=std * .7)
     samples = (samples * 4) - 3  # Set values between -1 and 1
@@ -176,29 +204,36 @@ def resample(samples, sample_time, chip_time, sample_factor):
     return new_samples, sample_period
 
 
-def graph_data(name, original_samples, samples, correlation, threshold, peaks,
-               sample_period, interactive=False):
+def graph_data(name, original_result, result, sample_period, interactive=False):
     if not interactive:
         import matplotlib
         matplotlib.use('agg')
 
     import matplotlib.pyplot as plt
 
-    fig, (ax0, ax1, ax2) = plt.subplots(3, 1, figsize=(8,6), sharex=True)
+    fig, (ax0, ax1, ax2, ax3) = plt.subplots(4, 1, figsize=(8,6), sharex=True)
 
-    ax0.plot(np.arange(len(original_samples)) * sample_period, original_samples, '.', markersize=.7)
+    ax0.plot(np.arange(len(original_result.samples)) * sample_period,
+             original_result.samples, '.', markersize=.7)
 
-    # Plot the raw samples
-    ax1.plot(np.arange(len(samples)) * sample_period, samples, '.', markersize=.7)
-
-    ax2.plot(np.arange(len(threshold)) * sample_period, threshold, color='green', linewidth=1)
-    ax2.plot(np.arange(len(correlation)) * sample_period, correlation, linewidth=1)
-    xs, ys = zip(*peaks)
-    ax2.scatter(xs * sample_period, ys,
+    ax1.plot(np.arange(len(original_result.threshold)) * sample_period, original_result.threshold, color='green', linewidth=1)
+    ax1.plot(np.arange(len(original_result.correlation)) * sample_period, original_result.correlation, linewidth=1)
+    xs, ys = zip(*original_result.detected_signal)
+    ax1.scatter(xs * sample_period, ys,
                 marker='x',
                 color='yellow')
 
-    ax2.set_xlabel('Time (s)')
+    ax2.plot(np.arange(len(result.samples)) * sample_period,
+             result.samples, '.', markersize=.7)
+
+    ax3.plot(np.arange(len(result.threshold)) * sample_period, result.threshold, color='green', linewidth=1)
+    ax3.plot(np.arange(len(result.correlation)) * sample_period, result.correlation, linewidth=1)
+    xs, ys = zip(*result.detected_signal)
+    ax3.scatter(xs * sample_period, ys,
+                marker='x',
+                color='yellow')
+
+    ax3.set_xlabel('Time (s)')
 
     plt.tight_layout()
     plt.savefig(f'graphs/decoded-{name}.png', dpi=300)
