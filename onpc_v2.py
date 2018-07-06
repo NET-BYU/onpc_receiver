@@ -2,6 +2,7 @@ from functools import partial
 import json
 import logging
 import pathlib
+import time
 
 import attr
 import click
@@ -73,6 +74,7 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
     LOGGER.info("Location: %s", experiment_data['location'])
     LOGGER.info("Description: %s", experiment_data['description'])
 
+    start = time.time()
     raw_result = decode_symbols(samples, symbol,
                                 limiting_func=lambda x: x,
                                 correlation_func=partial(regular_correlation,
@@ -81,7 +83,10 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
                                                        size=threshold_size,
                                                        std=threshold_std,
                                                        lag=threshold_lag))
+    end = time.time()
+    LOGGER.info("Raw run time: %s", end - start)
 
+    start = time.time()
     limited_result = decode_symbols(samples, symbol,
                                     limiting_func=partial(norm_limit_samples,
                                                           threshold_percentile=limiting_threshold_percentile,
@@ -94,7 +99,10 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
                                                            size=threshold_size,
                                                            std=threshold_std,
                                                            lag=threshold_lag))
+    end = time.time()
+    LOGGER.info("Norm limiting run time: %s", end - start)
 
+    start = time.time()
     rank_result = decode_symbols(samples, symbol,
                                  limiting_func=lambda x: x,
                                  correlation_func=partial(rank_correlation),
@@ -102,6 +110,8 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
                                                         size=threshold_size,
                                                         std=threshold_std,
                                                         lag=threshold_lag))
+    end = time.time()
+    LOGGER.info("Rank limiting run time: %s", end - start)
 
     if graph:
         graph_data(experiment_name, sample_period,
@@ -115,8 +125,8 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
                             name=experiment_name)
 
 def decode_symbols(samples, symbol, limiting_func, correlation_func, threshold_func):
-    limited_samples = limiting_func(samples)
-    correlation = correlation_func(limited_samples, symbol)
+    samples = limiting_func(samples)
+    correlation = correlation_func(samples, symbol)
     threshold = threshold_func(correlation)
     peak_xs, peak_ys = find_peaks(correlation, threshold)
 
@@ -149,7 +159,9 @@ def rank_correlation(samples, symbol):
             rank = stats.rankdata(data)
             return (rank * symbol).sum()
 
-    return samples.rolling(window=len(symbol)).apply(calc)
+    temp = samples.rolling(window=len(symbol)).apply(calc)
+
+    return temp
 
 
 def regular_correlation(samples, symbol, lpf_size):
