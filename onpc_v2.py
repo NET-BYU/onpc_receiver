@@ -95,6 +95,14 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
                                                            std=threshold_std,
                                                            lag=threshold_lag))
 
+    limited_result = decode_symbols(samples, symbol,
+                                    limiting_func=lambda x: x,
+                                    correlation_func=partial(rank_correlation),
+                                    threshold_func=partial(std_factor_threshold,
+                                                           size=threshold_size,
+                                                           std=threshold_std,
+                                                           lag=threshold_lag))
+
     if graph:
         graph_data(experiment_name, raw_result, limited_result, sample_period,
                    interactive)
@@ -133,6 +141,14 @@ def find_peaks(correlation, threshold):
     peak_ys = correlation[peak_xs]
 
     return peak_xs, peak_ys
+
+
+def rank_correlation(samples, symbol):
+    def calc(data):
+            rank = stats.rankdata(data)
+            return (rank * symbol).sum()
+
+    return samples.rolling(window=len(symbol)).apply(calc)
 
 
 def regular_correlation(samples, symbol, lpf_size):
@@ -213,7 +229,7 @@ def prepare_samples(data, sample_factor=3):
 
     LOGGER.info("\tNew sample period: %s", sample_period.to(ureg.ms))
 
-    return new_samples, sample_period
+    return pd.Series(new_samples), sample_period
 
 
 def resample(samples, sample_time, chip_time, sample_factor):
