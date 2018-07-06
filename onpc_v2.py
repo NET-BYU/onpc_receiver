@@ -1,3 +1,4 @@
+from functools import partial
 import json
 import logging
 import pathlib
@@ -64,27 +65,35 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
         experiment_name = pathlib.Path(data_file.name).stem
         experiment_data = json.load(data_file)
 
-    raw_samples, sample_period = prepare_samples(experiment_data,
-                                                 sample_factor)
+    samples, sample_period = prepare_samples(experiment_data,
+                                             sample_factor)
 
-    # raw_samples = raw_samples[int(150 / sample_period.magnitude):int(-15 / sample_period.magnitude):]
-
-    symbol = get_symbol(experiment_data)
+    symbol = get_symbol(experiment_data, sample_factor)
 
     LOGGER.info("Location: %s", experiment_data['location'])
     LOGGER.info("Description: %s", experiment_data['description'])
 
-    samples = limit_samples(raw_samples,
-                            threshold_percentile=limiting_threshold_percentile,
-                            std_factor=limiting_std_factor,
-                            threshold=limiting_threshold,
-                            std=limiting_std)
+    raw_result = decode_symbols(samples, symbol,
+                                limiting_func=lambda x: x,
+                                correlation_func=partial(regular_correlation,
+                                                         lpf_size=lpf_size),
+                                threshold_func=partial(std_factor_threshold,
+                                                       size=threshold_size,
+                                                       std=threshold_std,
+                                                       lag=threshold_lag))
 
-    raw_result = decode_symbols(raw_samples, symbol, sample_factor, lpf_size,
-                                threshold_size, threshold_std, threshold_lag)
-
-    limited_result = decode_symbols(samples, symbol, sample_factor, lpf_size,
-                                    threshold_size, threshold_std, threshold_lag)
+    limited_result = decode_symbols(samples, symbol,
+                                    limiting_func=partial(norm_limit_samples,
+                                                          threshold_percentile=limiting_threshold_percentile,
+                                                          std_factor=limiting_std_factor,
+                                                          threshold=limiting_threshold,
+                                                          std=limiting_std),
+                                    correlation_func=partial(regular_correlation,
+                                                             lpf_size=lpf_size),
+                                    threshold_func=partial(std_factor_threshold,
+                                                           size=threshold_size,
+                                                           std=threshold_std,
+                                                           lag=threshold_lag))
 
     if graph:
         graph_data(experiment_name, raw_result, limited_result, sample_period,
@@ -96,24 +105,16 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
                             metadata=experiment_data,
                             name=experiment_name)
 
-
-def decode_symbols(samples, symbol, sample_factor, lpf_size, threshold_size,
-                   threshold_std, threshold_lag):
-    correlation = calculate_correlation(samples,
-                                        symbol,
-                                        sample_factor,
-                                        lpf_size)
-
-    threshold = calculate_threshold(correlation,
-                                    threshold_size,
-                                    threshold_std,
-                                    threshold_lag)
-
+def decode_symbols(samples, symbol, limiting_func, correlation_func, threshold_func):
+    limited_samples = limiting_func(samples)
+    correlation = correlation_func(limited_samples, symbol)
+    threshold = threshold_func(correlation)
     peak_xs, peak_ys = find_peaks(correlation, threshold)
 
-    # Make all data the same size (good for graphing)
-    empty = np.empty(len(symbol) * sample_factor - 1)
+
+    empty = np.empty(len(symbol))
     empty[:] = np.nan
+
     correlation = np.concatenate((empty, np.array(correlation)))
     threshold = np.concatenate((empty, np.array(threshold)))
     peak_xs += len(empty)
@@ -134,42 +135,35 @@ def find_peaks(correlation, threshold):
     return peak_xs, peak_ys
 
 
-def calculate_correlation(samples, symbol, sample_factor, lpf_size):
-
-    # Calculate correlation
-    correlation = np.correlate(np.repeat(symbol, sample_factor), samples)
+def regular_correlation(samples, symbol, lpf_size):
+    correlation = np.correlate(symbol, samples)
     correlation = np.flip(correlation, 0)
     correlation = pd.Series(correlation)
     correlation = correlation / np.sum(symbol == 1)
 
     # Low pass filter
-    correlation = correlation.rolling(window=lpf_size).mean()
-
-    # correlation = signal.medfilt(correlation, 101)
-    # correlation = pd.Series(correlation)
+    if lpf_size:
+        correlation = correlation.rolling(window=lpf_size).mean()
 
     return correlation
 
 
-def calculate_threshold(correlation, threshold_size, threshold_std, threshold_lag):
+def std_factor_threshold(correlation, size, std, lag):
     def calc_threshold(data):
-        data = data[:-threshold_lag]
-        return data.std() * threshold_std + data.mean()
+        data = data[:-lag]
+        return data.std() * std + data.mean()
 
-    threshold = correlation.rolling(window=threshold_size).apply(
+    threshold = correlation.rolling(window=size).apply(
         calc_threshold)
 
     return threshold
 
 
-def limit_samples(raw_samples, threshold_percentile=10, std_factor=.7, threshold=None, std=None):
+def norm_limit_samples(raw_samples, threshold_percentile=10, std_factor=.7,
+                       threshold=None, std=None):
 
     threshold = threshold or np.percentile(raw_samples, threshold_percentile)
     std = std or raw_samples.std()
-
-    # Overwrite calculated values
-    # std = 0.768194724106
-    # threshold = -98.8879846223
 
     LOGGER.info("Std: %s", std)
     LOGGER.info("Threshold: %s", threshold)
@@ -180,7 +174,7 @@ def limit_samples(raw_samples, threshold_percentile=10, std_factor=.7, threshold
     return samples
 
 
-def get_symbol(experiment_data, symbols_file='symbols.yaml'):
+def get_symbol(experiment_data, sample_factor, symbols_file='symbols.yaml'):
     with open(symbols_file) as f:
         symbols = yaml.load(f)
 
@@ -191,6 +185,7 @@ def get_symbol(experiment_data, symbols_file='symbols.yaml'):
         symbol = symbols[experiment_data['symbol_number']]
 
     symbol = np.array(symbol) * 2 - 1
+    symbol = np.repeat(symbol, sample_factor)
     return symbol
 
 
