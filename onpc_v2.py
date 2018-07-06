@@ -95,17 +95,18 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
                                                            std=threshold_std,
                                                            lag=threshold_lag))
 
-    limited_result = decode_symbols(samples, symbol,
-                                    limiting_func=lambda x: x,
-                                    correlation_func=partial(rank_correlation),
-                                    threshold_func=partial(std_factor_threshold,
-                                                           size=threshold_size,
-                                                           std=threshold_std,
-                                                           lag=threshold_lag))
+    rank_result = decode_symbols(samples, symbol,
+                                 limiting_func=lambda x: x,
+                                 correlation_func=partial(rank_correlation),
+                                 threshold_func=partial(std_factor_threshold,
+                                                        size=threshold_size,
+                                                        std=threshold_std,
+                                                        lag=threshold_lag))
 
     if graph:
-        graph_data(experiment_name, raw_result, limited_result, sample_period,
-                   interactive)
+        graph_data(experiment_name, sample_period,
+                   results=[raw_result, limited_result, rank_result],
+                   interactive=interactive)
 
     return ExperimentResult(original_result=raw_result,
                             limited_result=limited_result,
@@ -245,40 +246,29 @@ def resample(samples, sample_time, chip_time, sample_factor):
     return new_samples, sample_period
 
 
-def graph_data(name, original_result, result, sample_period, interactive=False):
+def graph_data(name, sample_period, results, interactive=False):
     if not interactive:
         import matplotlib
         matplotlib.use('agg')
 
     import matplotlib.pyplot as plt
 
-    fig, (ax0, ax1, ax2, ax3) = plt.subplots(4, 1, figsize=(8,6), sharex=True)
+    fig, axs = plt.subplots(len(results) * 2, 1, figsize=(8,6), sharex=True)
 
-    ax0.plot(np.arange(len(original_result.samples)) * sample_period,
-             original_result.samples, '.', markersize=.7)
-
-    ax1.plot(np.arange(len(original_result.threshold)) * sample_period, original_result.threshold, color='green', linewidth=1)
-    ax1.plot(np.arange(len(original_result.correlation)) * sample_period, original_result.correlation, linewidth=1)
-
-    if original_result.detected_signal:
-        xs, ys = zip(*original_result.detected_signal)
-        ax1.scatter(xs * sample_period, ys,
-                    marker='x',
-                    color='yellow')
-
-    ax2.plot(np.arange(len(result.samples)) * sample_period,
+    for i, result in enumerate(results):
+        axs[i * 2].plot(np.arange(len(result.samples)) * sample_period,
              result.samples, '.', markersize=.7)
 
-    ax3.plot(np.arange(len(result.threshold)) * sample_period, result.threshold, color='green', linewidth=1)
-    ax3.plot(np.arange(len(result.correlation)) * sample_period, result.correlation, linewidth=1)
+        axs[i * 2 + 1].plot(np.arange(len(result.threshold)) * sample_period, result.threshold, color='green', linewidth=1)
+        axs[i * 2 + 1].plot(np.arange(len(result.correlation)) * sample_period, result.correlation, linewidth=1)
 
-    if result.detected_signal:
-        xs, ys = zip(*result.detected_signal)
-        ax3.scatter(xs * sample_period, ys,
-                    marker='x',
-                    color='yellow')
+        if result.detected_signal:
+            xs, ys = zip(*result.detected_signal)
+            axs[i * 2 + 1].scatter(xs * sample_period, ys,
+                                   marker='x',
+                                   color='yellow')
 
-    ax3.set_xlabel('Time (s)')
+    axs[-1].set_xlabel('Time (s)')
 
     plt.tight_layout()
     plt.savefig(f'graphs/decoded-{name}.png', dpi=300)
