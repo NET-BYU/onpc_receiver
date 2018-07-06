@@ -25,9 +25,10 @@ class Result(object):
 @attr.s
 class ExperimentResult(object):
     original_result = attr.ib()
-    result = attr.ib()
+    limited_result = attr.ib()
     sample_period = attr.ib()
     metadata = attr.ib()
+    name = attr.ib()
 
 
 @click.command()
@@ -37,36 +38,63 @@ class ExperimentResult(object):
 @click.option('--threshold-lag', default=100)
 @click.option('--threshold-std', default=4.5)
 @click.option('--sample-factor', default=3)
+@click.option('--limiting-threshold-percentile', default=10)
+@click.option('--limiting-std-factor', default=.7)
+@click.option('--limiting-threshold', default=None, type=float)
+@click.option('--limiting-std', default=None, type=float)
 @click.option('--graph/--no-graph', default=True)
 @click.option('--interactive/-no-interactive', default=False)
-def main(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
-         threshold_std=4.5, sample_factor=3, graph=False, interactive=False):
+def main(*args, **kwargs):
+    return run(*args, **kwargs, logging_level=logging.INFO)
 
-    experiment_name = pathlib.Path(data_file.name).stem
-    experiment_data = json.load(data_file)
+
+def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
+         threshold_std=4.5, sample_factor=3, limiting_threshold_percentile=10,
+         limiting_std_factor=.7, limiting_threshold=None, limiting_std=None,
+         graph=False, interactive=False, logging_level=logging.ERROR):
+
+    if logging_level:
+        LOGGER.setLevel(logging_level)
+
+    if isinstance(data_file, str):
+        with open(data_file) as f:
+            experiment_name = pathlib.Path(data_file).stem
+            experiment_data = json.load(f)
+    else:
+        experiment_name = pathlib.Path(data_file.name).stem
+        experiment_data = json.load(data_file)
+
     raw_samples, sample_period = prepare_samples(experiment_data,
                                                  sample_factor)
+
+    # raw_samples = raw_samples[int(150 / sample_period.magnitude):int(-15 / sample_period.magnitude):]
+
     symbol = get_symbol(experiment_data)
 
     LOGGER.info("Location: %s", experiment_data['location'])
     LOGGER.info("Description: %s", experiment_data['description'])
 
-    samples = limit_samples(raw_samples)
+    samples = limit_samples(raw_samples,
+                            threshold_percentile=limiting_threshold_percentile,
+                            std_factor=limiting_std_factor,
+                            threshold=limiting_threshold,
+                            std=limiting_std)
 
     raw_result = decode_symbols(raw_samples, symbol, sample_factor, lpf_size,
                                 threshold_size, threshold_std, threshold_lag)
 
-    result = decode_symbols(samples, symbol, sample_factor, lpf_size,
-                            threshold_size, threshold_std, threshold_lag)
+    limited_result = decode_symbols(samples, symbol, sample_factor, lpf_size,
+                                    threshold_size, threshold_std, threshold_lag)
 
     if graph:
-        graph_data(experiment_name, raw_result, result, sample_period,
+        graph_data(experiment_name, raw_result, limited_result, sample_period,
                    interactive)
 
     return ExperimentResult(original_result=raw_result,
-                            result=result,
+                            limited_result=limited_result,
                             sample_period=sample_period,
-                            metadata=experiment_data)
+                            metadata=experiment_data,
+                            name=experiment_name)
 
 
 def decode_symbols(samples, symbol, sample_factor, lpf_size, threshold_size,
@@ -134,9 +162,10 @@ def calculate_threshold(correlation, threshold_size, threshold_std, threshold_la
     return threshold
 
 
-def limit_samples(raw_samples):
-    std = raw_samples.std()
-    threshold = np.percentile(raw_samples, 10)
+def limit_samples(raw_samples, threshold_percentile=10, std_factor=.7, threshold=None, std=None):
+
+    threshold = threshold or np.percentile(raw_samples, threshold_percentile)
+    std = std or raw_samples.std()
 
     # Overwrite calculated values
     # std = 0.768194724106
@@ -145,7 +174,7 @@ def limit_samples(raw_samples):
     LOGGER.info("Std: %s", std)
     LOGGER.info("Threshold: %s", threshold)
 
-    samples = stats.norm.cdf(raw_samples, loc=threshold, scale=std * .7)
+    samples = stats.norm.cdf(raw_samples, loc=threshold, scale=std * std_factor)
     samples = (samples * 4) - 3  # Set values between -1 and 1
 
     return samples
@@ -177,6 +206,7 @@ def prepare_samples(data, sample_factor=3):
     # samples = antenna1
 
     LOGGER.info("Reading sample file:")
+    LOGGER.info("\tNumber of samples collected: %s", len(samples))
     LOGGER.info("\tRun time: %s s (%s ms)", data['run_time'], 1000 * data['run_time'] / len(samples))
     LOGGER.info("\tChip time: %s", chip_time)
     LOGGER.info("\tSample factor: %s", sample_factor)
@@ -218,20 +248,24 @@ def graph_data(name, original_result, result, sample_period, interactive=False):
 
     ax1.plot(np.arange(len(original_result.threshold)) * sample_period, original_result.threshold, color='green', linewidth=1)
     ax1.plot(np.arange(len(original_result.correlation)) * sample_period, original_result.correlation, linewidth=1)
-    xs, ys = zip(*original_result.detected_signal)
-    ax1.scatter(xs * sample_period, ys,
-                marker='x',
-                color='yellow')
+
+    if original_result.detected_signal:
+        xs, ys = zip(*original_result.detected_signal)
+        ax1.scatter(xs * sample_period, ys,
+                    marker='x',
+                    color='yellow')
 
     ax2.plot(np.arange(len(result.samples)) * sample_period,
              result.samples, '.', markersize=.7)
 
     ax3.plot(np.arange(len(result.threshold)) * sample_period, result.threshold, color='green', linewidth=1)
     ax3.plot(np.arange(len(result.correlation)) * sample_period, result.correlation, linewidth=1)
-    xs, ys = zip(*result.detected_signal)
-    ax3.scatter(xs * sample_period, ys,
-                marker='x',
-                color='yellow')
+
+    if result.detected_signal:
+        xs, ys = zip(*result.detected_signal)
+        ax3.scatter(xs * sample_period, ys,
+                    marker='x',
+                    color='yellow')
 
     ax3.set_xlabel('Time (s)')
 
