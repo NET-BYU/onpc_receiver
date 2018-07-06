@@ -157,11 +157,17 @@ def find_peaks(correlation, threshold):
 def rank_correlation(samples, symbol):
     def calc(data):
             rank = stats.rankdata(data)
+
+            # Make it zero mean
+            rank = rank - (len(rank) / 2)
+
+            # Make values between -1 and 1
+            rank = rank / (len(rank) / 2)
+
             return (rank * symbol).sum()
 
-    temp = samples.rolling(window=len(symbol)).apply(calc)
-
-    return temp
+    correlation = samples.rolling(window=len(symbol)).apply(calc)
+    return correlation
 
 
 def regular_correlation(samples, symbol, lpf_size):
