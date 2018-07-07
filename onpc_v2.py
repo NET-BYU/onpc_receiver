@@ -1,3 +1,4 @@
+import concurrent.futures
 from functools import partial
 import json
 import logging
@@ -23,11 +24,12 @@ class Result(object):
     correlation = attr.ib()
     threshold = attr.ib()
     detected_signal = attr.ib()
+    name = attr.ib()
 
 @attr.s
 class ExperimentResult(object):
-    original_result = attr.ib()
-    limited_result = attr.ib()
+    main_result = attr.ib()
+    results = attr.ib()
     sample_period = attr.ib()
     metadata = attr.ib()
     name = attr.ib()
@@ -76,18 +78,20 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
 
     start = time.time()
     raw_result = decode_symbols(samples, symbol,
+                                name='raw',
                                 limiting_func=lambda x: x,
                                 correlation_func=partial(regular_correlation,
                                                          lpf_size=lpf_size),
-                                threshold_func=partial(std_factor_threshold,
+                                threshold_func=partial(rolling_std_factor_threshold,
                                                        size=threshold_size,
-                                                       std=threshold_std,
+                                                       factor=threshold_std,
                                                        lag=threshold_lag))
     end = time.time()
     LOGGER.info("Raw run time: %s", end - start)
 
     start = time.time()
     limited_result = decode_symbols(samples, symbol,
+                                    name='soft limited',
                                     limiting_func=partial(norm_limit_samples,
                                                           threshold_percentile=limiting_threshold_percentile,
                                                           std_factor=limiting_std_factor,
@@ -95,36 +99,52 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
                                                           std=limiting_std),
                                     correlation_func=partial(regular_correlation,
                                                              lpf_size=lpf_size),
-                                    threshold_func=partial(std_factor_threshold,
+                                    threshold_func=partial(rolling_std_factor_threshold,
                                                            size=threshold_size,
-                                                           std=threshold_std,
+                                                           factor=threshold_std,
                                                            lag=threshold_lag))
     end = time.time()
     LOGGER.info("Norm limiting run time: %s", end - start)
 
+    # start = time.time()
+    # slow_rank_result = decode_symbols(samples, symbol,
+    #                                   limiting_func=lambda x: x,
+    #                                   correlation_func=partial(slow_rank_correlation),
+    #                                   threshold_func=partial(rolling_std_factor_threshold,
+    #                                                          size=threshold_size,
+    #                                                          factor=threshold_std,
+    #                                                          lag=threshold_lag))
+    # end = time.time()
+    # LOGGER.info("Slow rank limiting run time: %s", end - start)
+
     start = time.time()
     rank_result = decode_symbols(samples, symbol,
+                                 name='ranked',
                                  limiting_func=lambda x: x,
                                  correlation_func=partial(rank_correlation),
                                  threshold_func=partial(std_factor_threshold,
-                                                        size=threshold_size,
-                                                        std=threshold_std,
-                                                        lag=threshold_lag))
+                                                        factor=threshold_std))
     end = time.time()
     LOGGER.info("Rank limiting run time: %s", end - start)
 
+    # Combine all results together
+    results = [raw_result, limited_result, rank_result]
+    # results = [rank_result]
+    results = {result.name: result for result in results}
+
     if graph:
         graph_data(experiment_name, sample_period,
-                   results=[raw_result, limited_result, rank_result],
+                   results=results,
                    interactive=interactive)
 
-    return ExperimentResult(original_result=raw_result,
-                            limited_result=limited_result,
+    return ExperimentResult(main_result=results['ranked'],
+                            results=results,
                             sample_period=sample_period,
                             metadata=experiment_data,
                             name=experiment_name)
 
-def decode_symbols(samples, symbol, limiting_func, correlation_func, threshold_func):
+
+def decode_symbols(samples, symbol, limiting_func, correlation_func, threshold_func, name=None):
     samples = limiting_func(samples)
     correlation = correlation_func(samples, symbol)
     threshold = threshold_func(correlation)
@@ -134,8 +154,13 @@ def decode_symbols(samples, symbol, limiting_func, correlation_func, threshold_f
     empty = np.empty(len(symbol))
     empty[:] = np.nan
 
+    if isinstance(threshold, (float, int)):
+        threshold = np.concatenate((empty, np.ones(len(correlation)) * threshold))
+    else:
+        threshold = np.concatenate((empty, np.array(threshold)))
+
     correlation = np.concatenate((empty, np.array(correlation)))
-    threshold = np.concatenate((empty, np.array(threshold)))
+
     peak_xs += len(empty)
 
     peaks = list(zip(peak_xs, peak_ys))
@@ -143,7 +168,8 @@ def decode_symbols(samples, symbol, limiting_func, correlation_func, threshold_f
     return Result(samples=samples,
                   correlation=correlation,
                   threshold=threshold,
-                  detected_signal=peaks)
+                  detected_signal=peaks,
+                  name=name)
 
 
 def find_peaks(correlation, threshold):
@@ -154,20 +180,71 @@ def find_peaks(correlation, threshold):
     return peak_xs, peak_ys
 
 
-def rank_correlation(samples, symbol):
-    def calc(data):
-            rank = stats.rankdata(data)
+def slow_rank_correlation(samples, symbol):
+    def calc(samples):
+        rank = stats.rankdata(samples)
+        rank = rank - (len(rank) / 2)  # Make it zero mean
+        rank = rank / (len(rank) / 2)  # Make values between -1 and 1
+        return (rank * symbol).sum()
 
-            # Make it zero mean
-            rank = rank - (len(rank) / 2)
+    correlation = pd.Series(samples).rolling(window=len(symbol)).apply(calc)
+    correlation = correlation[len(symbol):]
 
-            # Make values between -1 and 1
-            rank = rank / (len(rank) / 2)
-
-            return (rank * symbol).sum()
-
-    correlation = samples.rolling(window=len(symbol)).apply(calc)
     return correlation
+
+
+def run_rank_correlation(samples, symbol):
+    def calc(data):
+        rank = stats.rankdata(data)
+        rank = rank - (len(rank) / 2)  # Make it zero mean
+        rank = rank / (len(rank) / 2)  # Make values between -1 and 1
+        return (rank * symbol).sum()
+
+    correlation = np.array(pd.Series(samples).rolling(window=len(symbol)).apply(calc))
+    return correlation[len(symbol):]
+
+
+def rank_correlation(samples, symbol):
+    num_splits = 8
+    split_index = round(len(samples) / num_splits)
+
+    # Split up samples into parts
+    samples = np.array(samples)
+    split_samples = []
+    for split in range(num_splits):
+        start = split_index * split
+        end = split_index * (split + 1)
+
+        if split > 0:
+            start -= len(symbol)
+
+        split_samples.append(samples[start:end])
+
+    # Process the different parts in parallel
+    with concurrent.futures.ProcessPoolExecutor(max_workers=8) as executor:
+        futures = {}
+        for i, d in enumerate(split_samples):
+            f = executor.submit(run_rank_correlation, d, symbol)
+            futures[f] = i
+
+        results = []
+        for future in concurrent.futures.as_completed(futures):
+            results.append((futures[future], future.result()))
+
+    # Make sure results are in the right order
+    results = sorted(results)
+    i, correlation_parts = zip(*results)
+
+    # Combine parts back together
+    correlation = np.concatenate(correlation_parts)
+    correlation = pd.Series(correlation)
+
+    return correlation
+
+    # values = (delayed(calc)(samples[i:i+len(symbol)]) for i in range(0, len(samples) - len(symbol) + 1))
+    # correlation = pd.Series(compute(*values, scheduler='processes', num_workers=8))
+
+    # correlation = pd.Series(samples).rolling(window=len(symbol)).apply(calc)
 
 
 def regular_correlation(samples, symbol, lpf_size):
@@ -183,10 +260,15 @@ def regular_correlation(samples, symbol, lpf_size):
     return correlation
 
 
-def std_factor_threshold(correlation, size, std, lag):
+def std_factor_threshold(correlation, factor):
+    threshold = correlation.std() * factor
+    return threshold
+
+
+def rolling_std_factor_threshold(correlation, size, factor, lag):
     def calc_threshold(data):
         data = data[:-lag]
-        return data.std() * std + data.mean()
+        return data.std() * factor + data.mean()
 
     threshold = correlation.rolling(window=size).apply(
         calc_threshold)
@@ -273,12 +355,13 @@ def graph_data(name, sample_period, results, interactive=False):
 
     fig, axs = plt.subplots(len(results) * 2, 1, figsize=(8,6), sharex=True)
 
-    for i, result in enumerate(results):
+    for i, result in enumerate(results.values()):
         axs[i * 2].plot(np.arange(len(result.samples)) * sample_period,
              result.samples, '.', markersize=.7)
 
         axs[i * 2 + 1].plot(np.arange(len(result.threshold)) * sample_period, result.threshold, color='green', linewidth=1)
         axs[i * 2 + 1].plot(np.arange(len(result.correlation)) * sample_period, result.correlation, linewidth=1)
+        axs[i * 2 + 1].set_ylabel(result.name.title())
 
         if result.detected_signal:
             xs, ys = zip(*result.detected_signal)
