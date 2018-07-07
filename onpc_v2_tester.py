@@ -85,41 +85,30 @@ def get_consecutive_number_groups(lst, tolerence=20):
 
     yield prev
 
-def create_graph(result, location):
-    original_samples = result.original_result.samples
-    samples = result.limited_result.samples
-    sample_period = result.sample_period
-    detected_signal = result.limited_result.detected_signal
-    correlation = result.limited_result.correlation
-    correlation_threshold_high = result.limited_result.threshold
+def create_graph(experiment_result, location):
+    sample_period = experiment_result.sample_period
+    fig, axs = plt.subplots(len(experiment_result.results) * 2, 1, figsize=(8,6), sharex=True)
 
-    fig, (ax0, ax1, ax3) = plt.subplots(3, 1, figsize=(8,4), sharex=True)
+    for i, result in enumerate(experiment_result.results.values()):
+        axs[i * 2].plot(np.arange(len(result.samples)) * sample_period,
+             result.samples, '.', markersize=.7)
 
-    ax0.plot(np.arange(len(original_samples)) * sample_period, original_samples, '.', markersize=.7)
-    ax0.set_xlabel('Time (s)')
+        axs[i * 2 + 1].plot(np.arange(len(result.threshold)) * sample_period, result.threshold, color='green', linewidth=1)
+        axs[i * 2 + 1].plot(np.arange(len(result.correlation)) * sample_period, result.correlation, linewidth=1)
+        axs[i * 2 + 1].set_ylabel(result.name.title())
 
-    # Plot the raw samples
-    ax1.plot(np.arange(len(samples)) * sample_period, samples, '.', markersize=.7)
+        if result.detected_signal:
+            xs, ys = zip(*result.detected_signal)
+            axs[i * 2 + 1].scatter(xs * sample_period, ys,
+                                   marker='x',
+                                   color='yellow')
 
-    if detected_signal:
-        x, y = zip(*detected_signal)
-        ax3.scatter(x * sample_period, y,
-                    marker='x',
-                    color='yellow')
+    axs[-1].set_xlabel('Time (s)')
 
-
-    ax3.plot(np.arange(len(correlation_threshold_high)) * sample_period, correlation_threshold_high, color='green', label='upper threshold')
-    # ax3.plot(correlation_threshold_low, color='orange', label='lower threshold')
-    ax3.plot(np.arange(len(correlation)) * sample_period, correlation, label='correlation')
-
-    ax3.set_xlim(ax1.get_xlim())
-    ax3.set_xlabel('Time (s)')
-
-    # plt.legend()
     plt.tight_layout()
 
     if isinstance(location, str):
-        name = f"{result.metadata['distance']}-{result.metadata['location']}-{result.metadata['experiment_number']}"
+        name = f"{experiment_result.metadata['distance']}-{experiment_result.metadata['location']}-{experiment_result.metadata['experiment_number']}"
         # plt.savefig(os.path.join(location, f'{name}.pdf'))
         plt.savefig(os.path.join(location, f'{name}.png'), dpi=300)
     else:
@@ -127,6 +116,50 @@ def create_graph(result, location):
         plt.savefig(location, format='png', dpi=300)
 
     plt.close(fig)
+
+
+# def create_graph(result, location):
+#     original_samples = result.original_result.samples
+#     samples = result.limited_result.samples
+#     sample_period = result.sample_period
+#     detected_signal = result.limited_result.detected_signal
+#     correlation = result.limited_result.correlation
+#     correlation_threshold_high = result.limited_result.threshold
+
+#     fig, (ax0, ax1, ax3) = plt.subplots(3, 1, figsize=(8,4), sharex=True)
+
+#     ax0.plot(np.arange(len(original_samples)) * sample_period, original_samples, '.', markersize=.7)
+#     ax0.set_xlabel('Time (s)')
+
+#     # Plot the raw samples
+#     ax1.plot(np.arange(len(samples)) * sample_period, samples, '.', markersize=.7)
+
+#     if detected_signal:
+#         x, y = zip(*detected_signal)
+#         ax3.scatter(x * sample_period, y,
+#                     marker='x',
+#                     color='yellow')
+
+
+#     ax3.plot(np.arange(len(correlation_threshold_high)) * sample_period, correlation_threshold_high, color='green', label='upper threshold')
+#     # ax3.plot(correlation_threshold_low, color='orange', label='lower threshold')
+#     ax3.plot(np.arange(len(correlation)) * sample_period, correlation, label='correlation')
+
+#     ax3.set_xlim(ax1.get_xlim())
+#     ax3.set_xlabel('Time (s)')
+
+#     # plt.legend()
+#     plt.tight_layout()
+
+#     if isinstance(location, str):
+#         name = f"{result.metadata['distance']}-{result.metadata['location']}-{result.metadata['experiment_number']}"
+#         # plt.savefig(os.path.join(location, f'{name}.pdf'))
+#         plt.savefig(os.path.join(location, f'{name}.png'), dpi=300)
+#     else:
+#         # Treat location as file
+#         plt.savefig(location, format='png', dpi=300)
+
+#     plt.close(fig)
 
 
 def generate_graph(result):
@@ -149,7 +182,7 @@ def get_details(result):
 
 
 def get_symbol_groups(result):
-    detected_signal_index = [x for x, y in result.limited_result.detected_signal]
+    detected_signal_index = [x for x, y in result.main_result.detected_signal]
     groups = list(get_consecutive_number_groups(detected_signal_index))
 
     new_groups = []
