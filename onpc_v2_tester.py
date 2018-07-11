@@ -5,6 +5,7 @@ import functools
 import hashlib
 import io
 import itertools
+import json
 import logging
 import logging.handlers
 import glob
@@ -22,9 +23,9 @@ matplotlib.use('agg')
 import matplotlib.pyplot as plt
 import numpy as np
 from pint import UnitRegistry
+import psutil
 from tqdm import tqdm
 import yaml
-import psutil
 
 
 ureg = UnitRegistry()
@@ -217,13 +218,14 @@ def get_result_score(result):
     symbol_size = result.metadata.get('symbol_size', 1023)
     symbol_time = chip_time * symbol_size
 
-    expected_received_symbols = int((run_time // symbol_time) - 1)
+    expected_received_symbols = round((run_time - symbol_time) / symbol_time)
+
     # print(run_time, symbol_time, expected_received_symbols)
     # print(groups)
     # print(diffs_between_groups)
-    # print(input.sample_period)
+    # print(result.sample_period)
     # print(symbol_time)
-    # print(symbol_time / input.sample_period.magnitude)
+    # print(symbol_time / result.sample_period.magnitude)
     # exit()
 
     if not result.metadata.get('transmitting', True):
@@ -233,12 +235,15 @@ def get_result_score(result):
 
     false_positive = 0
     correct = 0
+    prev_diff = 0
 
     if len(groups) > 0:
         # Assume that the first symbol is correct
         correct += 1
 
     for diff in diffs_between_groups:
+        diff += prev_diff
+
         time_diff = diff * result.sample_period.magnitude  # Convert from sample number diffs to time diffs
         num_symbols = time_diff / symbol_time  # Number of symbols between groups
         offset = abs(round(num_symbols) - num_symbols)
@@ -249,8 +254,10 @@ def get_result_score(result):
         # If the offset is far enough away, then it is a false positive
         if time_diff < 10 or offset > .2:
             false_positive += 1
+            prev_diff = diff
         else:
             correct += 1
+            prev_diff = 0
 
     return {"Total": expected_received_symbols,
             "Correct": correct,
@@ -265,16 +272,8 @@ def get_all_results_score(results):
                                 'False positive': (['False positive'], sum)})
 
 
-@cli.command(help="Run ONPC on collected data different parameters")
-@click.option('-d', '--data-file', multiple=True, help='Data file')
-@click.option('-f', '--folder', multiple=True, help='Data folder')
-@click.option('--lpf-size', default=30)
-@click.option('--threshold-size', default=600)
-@click.option('--threshold-lag', default=100)
-@click.option('--threshold-std', default=4.5)
-@click.option('--webpage/--no-webpage')
-def run_onpc(data_file, folder, lpf_size, threshold_size, threshold_lag,
-             threshold_std, webpage):
+def onpc(data_file, folder, lpf_size=30, threshold_size=600, threshold_lag=100,
+         threshold_std=4.0, rank_method='min'):
     import onpc_v2
 
     data_files = itertools.chain(data_file,
@@ -286,7 +285,7 @@ def run_onpc(data_file, folder, lpf_size, threshold_size, threshold_lag,
     results = []
 
     with tqdm(total=len(data_files)) as pbar:
-        with concurrent.futures.ProcessPoolExecutor(max_workers=psutil.cpu_count()) as executor:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=2) as executor:
             futures = []
             for file in data_files:
                 f = executor.submit(onpc_v2.run,
@@ -295,6 +294,7 @@ def run_onpc(data_file, folder, lpf_size, threshold_size, threshold_lag,
                                     threshold_size=threshold_size,
                                     threshold_lag=threshold_lag,
                                     threshold_std=threshold_std,
+                                    rank_method=rank_method,
                                     graph=False,
                                     interactive=False)
                 futures.append(f)
@@ -303,6 +303,23 @@ def run_onpc(data_file, folder, lpf_size, threshold_size, threshold_lag,
             for future in concurrent.futures.as_completed(futures):
                 pbar.update()
                 results.append(future.result())
+
+    return results
+
+
+@cli.command(help="Run ONPC on collected data different parameters")
+@click.option('-d', '--data-file', multiple=True, help='Data file')
+@click.option('-f', '--folder', multiple=True, help='Data folder')
+@click.option('--lpf-size', default=30)
+@click.option('--threshold-size', default=600)
+@click.option('--threshold-lag', default=100)
+@click.option('--threshold-std', default=4.0)
+@click.option('--webpage/--no-webpage', default=False)
+def run_onpc(data_file, folder, lpf_size, threshold_size, threshold_lag,
+             threshold_std, webpage):
+
+    results = onpc(data_file, folder, lpf_size, threshold_size, threshold_lag,
+                   threshold_std)
 
     sorted_location_results = sorted(results, key=lambda x: (x.metadata['location'],
                                                              x.metadata['description'],
@@ -321,7 +338,55 @@ def run_onpc(data_file, folder, lpf_size, threshold_size, threshold_lag,
         with open('onpc_results.html', 'w') as f:
             f.write(template.render(results=sorted_location_results))
 
-    print(get_all_results_score(sorted_location_results))
+    print(json.dumps(get_all_results_score(sorted_location_results), indent=2))
+
+
+@cli.command(help="Test ONPC with different threshold factors")
+@click.option('-d', '--data-file', multiple=True, help='Data file')
+@click.option('-f', '--folder', multiple=True, help='Data folder')
+@click.option('-t', '--threshold_factor', 'threshold_factors', type=float,
+              multiple=True, help='Threshold factor')
+def run_threshold_factor_test(data_file, folder, threshold_factors):
+    scores = []
+    for factor in threshold_factors:
+        results = onpc(data_file, folder, threshold_std=factor)
+        score = get_all_results_score(results)
+        score['Threshold Factor'] = factor
+        scores.append(score)
+
+    print(json.dumps(scores, indent=2))
+
+
+@cli.command(help="Test ONPC with different low pass filter sizes")
+@click.option('-d', '--data-file', multiple=True, help='Data file')
+@click.option('-f', '--folder', multiple=True, help='Data folder')
+@click.option('-l', '--lpf-size', 'lpf_sizes', type=int,
+              multiple=True, help='Threshold factor')
+def run_lpf_size_test(data_file, folder, lpf_sizes):
+    scores = []
+    for size in lpf_sizes:
+        results = onpc(data_file, folder, lpf_size=size)
+        score = get_all_results_score(results)
+        score['Low pass filter size'] = size
+        scores.append(score)
+
+    print(json.dumps(scores, indent=2))
+
+
+@cli.command(help="Test ONPC with different rank methods")
+@click.option('-d', '--data-file', multiple=True, help='Data file')
+@click.option('-f', '--folder', multiple=True, help='Data folder')
+def run_rank_method_test(data_file, folder):
+    scores = []
+    methods = ['average', 'min', 'max', 'dense', 'ordinal']
+    for method in methods:
+        results = onpc(data_file, folder, rank_method=method)
+        score = get_all_results_score(results)
+        score['Rank method'] = method
+        scores.append(score)
+
+    print(json.dumps(scores, indent=2))
+
 
 
 if __name__ == '__main__':
