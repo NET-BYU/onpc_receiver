@@ -10,6 +10,7 @@ import click
 import numpy as np
 import pandas as pd
 import pint
+import psutil
 from scipy import signal, stats
 import yaml
 
@@ -40,12 +41,17 @@ class ExperimentResult(object):
 @click.option('--lpf-size', default=30)
 @click.option('--threshold-size', default=600)
 @click.option('--threshold-lag', default=100)
-@click.option('--threshold-std', default=4.5)
+@click.option('--threshold-std', default=4.0)
 @click.option('--sample-factor', default=3)
 @click.option('--limiting-threshold-percentile', default=10)
 @click.option('--limiting-std-factor', default=.7)
 @click.option('--limiting-threshold', default=None, type=float)
 @click.option('--limiting-std', default=None, type=float)
+@click.option('--rank-method', default='min',
+              type=click.Choice(['average', 'min', 'max', 'dense', 'ordinal']))
+@click.option('--run-raw/--no-run-raw', default=False)
+@click.option('--run-limited/--no-run-limited', default=False)
+@click.option('--run-ranked/--no-run-ranked', default=True)
 @click.option('--graph/--no-graph', default=True)
 @click.option('--interactive/-no-interactive', default=False)
 def main(*args, **kwargs):
@@ -53,8 +59,9 @@ def main(*args, **kwargs):
 
 
 def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
-         threshold_std=4.5, sample_factor=3, limiting_threshold_percentile=10,
+         threshold_std=4.0, sample_factor=3, limiting_threshold_percentile=10,
          limiting_std_factor=.7, limiting_threshold=None, limiting_std=None,
+         rank_method='min', run_raw=False, run_limited=False, run_ranked=True,
          graph=False, interactive=False, logging_level=logging.ERROR):
 
     if logging_level:
@@ -76,35 +83,41 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
     LOGGER.info("Location: %s", experiment_data['location'])
     LOGGER.info("Description: %s", experiment_data['description'])
 
-    start = time.time()
-    raw_result = decode_symbols(samples, symbol,
-                                name='raw',
-                                limiting_func=lambda x: x,
-                                correlation_func=partial(regular_correlation,
-                                                         lpf_size=lpf_size),
-                                threshold_func=partial(rolling_std_factor_threshold,
-                                                       size=threshold_size,
-                                                       factor=threshold_std,
-                                                       lag=threshold_lag))
-    end = time.time()
-    LOGGER.info("Raw run time: %s", end - start)
+    results = []
 
-    start = time.time()
-    limited_result = decode_symbols(samples, symbol,
-                                    name='soft limited',
-                                    limiting_func=partial(norm_limit_samples,
-                                                          threshold_percentile=limiting_threshold_percentile,
-                                                          std_factor=limiting_std_factor,
-                                                          threshold=limiting_threshold,
-                                                          std=limiting_std),
+    if run_raw:
+        start = time.time()
+        raw_result = decode_symbols(samples, symbol,
+                                    name='raw',
+                                    limiting_func=lambda x: x,
                                     correlation_func=partial(regular_correlation,
                                                              lpf_size=lpf_size),
                                     threshold_func=partial(rolling_std_factor_threshold,
                                                            size=threshold_size,
                                                            factor=threshold_std,
                                                            lag=threshold_lag))
-    end = time.time()
-    LOGGER.info("Norm limiting run time: %s", end - start)
+        end = time.time()
+        LOGGER.info("Raw run time: %s", end - start)
+        results.append(raw_result)
+
+    if run_limited:
+        start = time.time()
+        limited_result = decode_symbols(samples, symbol,
+                                        name='soft limited',
+                                        limiting_func=partial(norm_limit_samples,
+                                                              threshold_percentile=limiting_threshold_percentile,
+                                                              std_factor=limiting_std_factor,
+                                                              threshold=limiting_threshold,
+                                                              std=limiting_std),
+                                        correlation_func=partial(regular_correlation,
+                                                                 lpf_size=lpf_size),
+                                        threshold_func=partial(rolling_std_factor_threshold,
+                                                               size=threshold_size,
+                                                               factor=threshold_std,
+                                                               lag=threshold_lag))
+        end = time.time()
+        LOGGER.info("Norm limiting run time: %s", end - start)
+        results.append(limited_result)
 
     # start = time.time()
     # slow_rank_result = decode_symbols(samples, symbol,
@@ -116,20 +129,23 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
     #                                                          lag=threshold_lag))
     # end = time.time()
     # LOGGER.info("Slow rank limiting run time: %s", end - start)
+    # results.append(slow_rank_result)
 
-    start = time.time()
-    rank_result = decode_symbols(samples, symbol,
-                                 name='ranked',
-                                 limiting_func=lambda x: x,
-                                 correlation_func=partial(rank_correlation),
-                                 threshold_func=partial(std_factor_threshold,
-                                                        factor=threshold_std))
-    end = time.time()
-    LOGGER.info("Rank limiting run time: %s", end - start)
+    if run_ranked:
+        start = time.time()
+        rank_result = decode_symbols(samples, symbol,
+                                     name='ranked',
+                                     limiting_func=lambda x: x,
+                                     correlation_func=partial(rank_correlation,
+                                                              method=rank_method,
+                                                              lpf_size=lpf_size),
+                                     threshold_func=partial(std_factor_threshold,
+                                                            factor=threshold_std))
+        end = time.time()
+        LOGGER.info("Rank limiting run time: %s", end - start)
+        results.append(rank_result)
 
     # Combine all results together
-    results = [raw_result, limited_result, rank_result]
-    # results = [rank_result]
     results = {result.name: result for result in results}
 
     if graph:
@@ -187,25 +203,24 @@ def slow_rank_correlation(samples, symbol):
         rank = rank / (len(rank) / 2)  # Make values between -1 and 1
         return (rank * symbol).sum()
 
-    correlation = pd.Series(samples).rolling(window=len(symbol)).apply(calc)
+    correlation = pd.Series(samples).rolling(window=len(symbol)).apply(calc, raw=True)
     correlation = correlation[len(symbol):]
 
     return correlation
 
 
-def run_rank_correlation(samples, symbol):
+def run_rank_correlation(samples, symbol, method='average'):
     def calc(data):
-        rank = stats.rankdata(data)
+        rank = stats.rankdata(data, method)
         rank = rank - (len(rank) / 2)  # Make it zero mean
         rank = rank / (len(rank) / 2)  # Make values between -1 and 1
         return (rank * symbol).sum()
 
-    correlation = np.array(pd.Series(samples).rolling(window=len(symbol)).apply(calc))
+    correlation = np.array(pd.Series(samples).rolling(window=len(symbol)).apply(calc, raw=True))
     return correlation[len(symbol):]
 
 
-def rank_correlation(samples, symbol):
-    num_splits = 8
+def rank_correlation(samples, symbol, num_splits=8, method='average', lpf_size=None):
     split_index = round(len(samples) / num_splits)
 
     # Split up samples into parts
@@ -221,10 +236,10 @@ def rank_correlation(samples, symbol):
         split_samples.append(samples[start:end])
 
     # Process the different parts in parallel
-    with concurrent.futures.ProcessPoolExecutor(max_workers=8) as executor:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=min(num_splits, psutil.cpu_count())) as executor:
         futures = {}
         for i, d in enumerate(split_samples):
-            f = executor.submit(run_rank_correlation, d, symbol)
+            f = executor.submit(run_rank_correlation, d, symbol, method=method)
             futures[f] = i
 
         results = []
@@ -238,6 +253,10 @@ def rank_correlation(samples, symbol):
     # Combine parts back together
     correlation = np.concatenate(correlation_parts)
     correlation = pd.Series(correlation)
+
+    # Low pass filter
+    if lpf_size:
+        correlation = correlation.rolling(window=lpf_size).mean()
 
     return correlation
 
@@ -270,8 +289,8 @@ def rolling_std_factor_threshold(correlation, size, factor, lag):
         data = data[:-lag]
         return data.std() * factor + data.mean()
 
-    threshold = correlation.rolling(window=size).apply(
-        calc_threshold)
+    threshold = correlation.rolling(window=size).apply(calc_threshold,
+                                                       raw=True)
 
     return threshold
 
