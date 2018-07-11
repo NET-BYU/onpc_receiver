@@ -65,9 +65,10 @@ def graph(data, name, total_time):
 @click.option('--symbol-size', type=int, prompt=True)
 @click.option('--transmitting', type=bool, prompt=True)
 @click.option('--chip-time', default="13.424 ms")
+@click.option('--symbol-number', default=1)
 def get_samples(remote, name, folder, num_samples, tap, distance, location,
                 description, experiment_number, symbol_size, transmitting,
-                chip_time):
+                chip_time, symbol_number):
     import paramiko
     import re
 
@@ -120,6 +121,7 @@ def get_samples(remote, name, folder, num_samples, tap, distance, location,
                    'symbol_size': symbol_size,
                    'transmitting': transmitting,
                    'chip_time': chip_time,
+                   'symbol_number': symbol_number,
                    'samples': samples}, f)
 
     graph(samples, name, run_time)
