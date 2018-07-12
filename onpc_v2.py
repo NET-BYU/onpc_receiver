@@ -36,6 +36,18 @@ class ExperimentResult(object):
     name = attr.ib()
 
 
+def split_num_list(ctx, param, value):
+    if value is None or value == '':
+        return None
+    try:
+        try:
+            return [int(x) for x in value.split(',') if x]
+        except ValueError:
+            return [float(x) for x in value.split(',') if x]
+    except ValueError:
+        raise click.BadParameter('List must only contain numbers')
+
+
 @click.command()
 @click.argument('data_file', type=click.File('r'))
 @click.option('--lpf-size', default=30)
@@ -52,6 +64,7 @@ class ExperimentResult(object):
 @click.option('--run-raw/--no-run-raw', default=False)
 @click.option('--run-limited/--no-run-limited', default=False)
 @click.option('--run-ranked/--no-run-ranked', default=True)
+@click.option('--antenna-select', default=None, callback=split_num_list)
 @click.option('--graph/--no-graph', default=True)
 @click.option('--interactive/-no-interactive', default=False)
 def main(*args, **kwargs):
@@ -62,7 +75,8 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
          threshold_std=4.0, sample_factor=3, limiting_threshold_percentile=10,
          limiting_std_factor=.7, limiting_threshold=None, limiting_std=None,
          rank_method='min', run_raw=False, run_limited=False, run_ranked=True,
-         graph=False, interactive=False, logging_level=logging.ERROR):
+         antenna_select=None, graph=False, interactive=False,
+         logging_level=logging.ERROR):
 
     if logging_level:
         LOGGER.setLevel(logging_level)
@@ -76,7 +90,8 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
         experiment_data = json.load(data_file)
 
     samples, sample_period = prepare_samples(experiment_data,
-                                             sample_factor)
+                                             sample_factor,
+                                             antenna_select=antenna_select)
 
     symbol = get_symbol(experiment_data, sample_factor)
 
@@ -318,6 +333,9 @@ def get_symbol(experiment_data, sample_factor, symbols_file='symbols.yaml'):
         LOGGER.warning("symbol_number is not specified in experiment data. Using symbol 1.")
         symbol = symbols[1]
     else:
+        # experiment_data['symbol_number'] = 2
+        # experiment_data['symbol_number'] = 3
+        LOGGER.info("Using symbol number: %s", experiment_data['symbol_number'])
         symbol = symbols[experiment_data['symbol_number']]
 
     symbol = np.array(symbol) * 2 - 1
@@ -325,16 +343,23 @@ def get_symbol(experiment_data, sample_factor, symbols_file='symbols.yaml'):
     return symbol
 
 
-def prepare_samples(data, sample_factor=3):
+def prepare_samples(data, sample_factor=3, antenna_select=None):
     chip_time = ureg(data['chip_time'])
-    antenna1, antenna2, antenna3 = map(pd.Series, zip(*data['samples']))
+    antennas = list(map(pd.Series, zip(*data['samples'])))
+    antenna_select = np.array(antenna_select or [1, 2, 3])
+    LOGGER.info("Using antennas: %s", antenna_select)
+    antenna_select -= 1
 
-    antenna1 = antenna1.interpolate()
-    antenna2 = antenna2.interpolate()
-    antenna3 = antenna3.interpolate()
+    if len(antenna_select) == 0:
+        LOGGER.error("antenna_select must have at least one value")
+        exit()
 
-    samples = (antenna1 + antenna2 + antenna3) / 3
-    # samples = antenna1
+
+    total = antennas[antenna_select[0]].interpolate()
+    for a in antenna_select[1:]:
+        total += antennas[a].interpolate()
+
+    samples = total / len(antenna_select)
 
     LOGGER.info("Reading sample file:")
     LOGGER.info("\tNumber of samples collected: %s", len(samples))
