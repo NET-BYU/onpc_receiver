@@ -273,7 +273,7 @@ def get_all_results_score(results):
 
 
 def onpc(data_file, folder, lpf_size=30, threshold_size=600, threshold_lag=100,
-         threshold_std=4.0, rank_method='min'):
+         threshold_std=4.0, rank_method='min', antenna_select=None):
     import onpc_v2
 
     data_files = itertools.chain(data_file,
@@ -295,6 +295,7 @@ def onpc(data_file, folder, lpf_size=30, threshold_size=600, threshold_lag=100,
                                     threshold_lag=threshold_lag,
                                     threshold_std=threshold_std,
                                     rank_method=rank_method,
+                                    antenna_select=antenna_select,
                                     graph=False,
                                     interactive=False)
                 futures.append(f)
@@ -383,6 +384,22 @@ def run_rank_method_test(data_file, folder):
         results = onpc(data_file, folder, rank_method=method)
         score = get_all_results_score(results)
         score['Rank method'] = method
+        scores.append(score)
+
+    print(json.dumps(scores, indent=2))
+
+
+@cli.command(help="Test ONPC with different antenna select configurations")
+@click.option('-d', '--data-file', multiple=True, help='Data file')
+@click.option('-f', '--folder', multiple=True, help='Data folder')
+def run_antenna_select_test(data_file, folder):
+    scores = []
+    # antennas = [[1], [2], [3], [1, 2], [1, 3], [2, 3], [1, 2, 3]]
+    antennas = [[1, 2, 3]]
+    for antenna in antennas:
+        results = onpc(data_file, folder, antenna_select=antenna)
+        score = get_all_results_score(results)
+        score['Antenna select'] = antenna
         scores.append(score)
 
     print(json.dumps(scores, indent=2))
