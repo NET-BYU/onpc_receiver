@@ -152,8 +152,7 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
                                      name='ranked',
                                      limiting_func=lambda x: x,
                                      correlation_func=partial(rank_correlation,
-                                                              method=rank_method,
-                                                              lpf_size=lpf_size),
+                                                              method=rank_method),
                                      threshold_func=partial(std_factor_threshold,
                                                             factor=threshold_std))
         end = time.time()
@@ -235,7 +234,7 @@ def run_rank_correlation(samples, symbol, method='average'):
     return correlation[len(symbol):]
 
 
-def rank_correlation(samples, symbol, num_splits=8, method='average', lpf_size=None):
+def rank_correlation(samples, symbol, num_splits=8, method='average'):
     split_index = round(len(samples) / num_splits)
 
     # Split up samples into parts
@@ -269,16 +268,7 @@ def rank_correlation(samples, symbol, num_splits=8, method='average', lpf_size=N
     correlation = np.concatenate(correlation_parts)
     correlation = pd.Series(correlation)
 
-    # Low pass filter
-    if lpf_size:
-        correlation = correlation.rolling(window=lpf_size).mean()
-
     return correlation
-
-    # values = (delayed(calc)(samples[i:i+len(symbol)]) for i in range(0, len(samples) - len(symbol) + 1))
-    # correlation = pd.Series(compute(*values, scheduler='processes', num_workers=8))
-
-    # correlation = pd.Series(samples).rolling(window=len(symbol)).apply(calc)
 
 
 def regular_correlation(samples, symbol, lpf_size):

@@ -394,8 +394,7 @@ def run_rank_method_test(data_file, folder):
 @click.option('-f', '--folder', multiple=True, help='Data folder')
 def run_antenna_select_test(data_file, folder):
     scores = []
-    # antennas = [[1], [2], [3], [1, 2], [1, 3], [2, 3], [1, 2, 3]]
-    antennas = [[1, 2, 3]]
+    antennas = [[1], [2], [3], [1, 2], [1, 3], [2, 3], [1, 2, 3]]
     for antenna in antennas:
         results = onpc(data_file, folder, antenna_select=antenna)
         score = get_all_results_score(results)
