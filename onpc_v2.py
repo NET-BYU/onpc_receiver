@@ -336,7 +336,7 @@ def get_symbol(experiment_data, sample_factor, symbols_file='symbols.yaml'):
 def prepare_samples(data, sample_factor=3, antenna_select=None):
     chip_time = ureg(data['chip_time'])
     antennas = list(map(pd.Series, zip(*data['samples'])))
-    antenna_select = np.array(antenna_select or [1, 2, 3])
+    antenna_select = np.array(antenna_select or [1, 3])
     LOGGER.info("Using antennas: %s", antenna_select)
     antenna_select -= 1
 
