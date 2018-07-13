@@ -65,6 +65,8 @@ def split_num_list(ctx, param, value):
 @click.option('--run-limited/--no-run-limited', default=False)
 @click.option('--run-ranked/--no-run-ranked', default=True)
 @click.option('--antenna-select', default=None, callback=split_num_list)
+@click.option('--antenna-method', default='average',
+              type=click.Choice(['average', 'min', 'max']))
 @click.option('--graph/--no-graph', default=True)
 @click.option('--interactive/-no-interactive', default=False)
 def main(*args, **kwargs):
@@ -75,8 +77,8 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
          threshold_std=4.0, sample_factor=3, limiting_threshold_percentile=10,
          limiting_std_factor=.7, limiting_threshold=None, limiting_std=None,
          rank_method='min', run_raw=False, run_limited=False, run_ranked=True,
-         antenna_select=None, graph=False, interactive=False,
-         logging_level=logging.ERROR):
+         antenna_select=None, antenna_method='average', graph=False,
+         interactive=False, logging_level=logging.ERROR):
 
     if logging_level:
         LOGGER.setLevel(logging_level)
@@ -91,7 +93,8 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
 
     samples, sample_period = prepare_samples(experiment_data,
                                              sample_factor,
-                                             antenna_select=antenna_select)
+                                             antenna_select=antenna_select,
+                                             antenna_method=antenna_method)
 
     symbol = get_symbol(experiment_data, sample_factor)
 
@@ -333,7 +336,7 @@ def get_symbol(experiment_data, sample_factor, symbols_file='symbols.yaml'):
     return symbol
 
 
-def prepare_samples(data, sample_factor=3, antenna_select=None):
+def prepare_samples(data, sample_factor=3, antenna_select=None, antenna_method='average'):
     chip_time = ureg(data['chip_time'])
     antennas = list(map(pd.Series, zip(*data['samples'])))
     antenna_select = np.array(antenna_select or [1, 3])
@@ -344,12 +347,18 @@ def prepare_samples(data, sample_factor=3, antenna_select=None):
         LOGGER.error("antenna_select must have at least one value")
         exit()
 
+    selected_antennas = [antennas[i].interpolate() for i in antenna_select]
+    antenna_data = np.stack(selected_antennas)
 
-    total = antennas[antenna_select[0]].interpolate()
-    for a in antenna_select[1:]:
-        total += antennas[a].interpolate()
-
-    samples = total / len(antenna_select)
+    if antenna_method == 'average':
+        samples = antenna_data.mean(axis=0)
+    elif antenna_method == 'min':
+        samples = antenna_data.min(axis=0)
+    elif antenna_method == 'max':
+        samples = antenna_data.max(axis=0)
+    else:
+        LOGGER.error("Unknown antenna_method: %s", antenna_method)
+        exit()
 
     LOGGER.info("Reading sample file:")
     LOGGER.info("\tNumber of samples collected: %s", len(samples))

@@ -273,7 +273,8 @@ def get_all_results_score(results):
 
 
 def onpc(data_file, folder, lpf_size=30, threshold_size=600, threshold_lag=100,
-         threshold_std=4.0, rank_method='min', antenna_select=None):
+         threshold_std=4.0, rank_method='min', antenna_select=None,
+         antenna_method='average'):
     import onpc_v2
 
     data_files = itertools.chain(data_file,
@@ -399,6 +400,21 @@ def run_antenna_select_test(data_file, folder):
         results = onpc(data_file, folder, antenna_select=antenna)
         score = get_all_results_score(results)
         score['Antenna select'] = antenna
+        scores.append(score)
+
+    print(json.dumps(scores, indent=2))
+
+
+@cli.command(help="Test ONPC with different antenna methods")
+@click.option('-d', '--data-file', multiple=True, help='Data file')
+@click.option('-f', '--folder', multiple=True, help='Data folder')
+def run_antenna_method_test(data_file, folder):
+    scores = []
+    methods = ['average', 'max', 'min']
+    for method in methods:
+        results = onpc(data_file, folder, antenna_method=method)
+        score = get_all_results_score(results)
+        score['Antenna method'] = method
         scores.append(score)
 
     print(json.dumps(scores, indent=2))
