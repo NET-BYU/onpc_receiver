@@ -50,6 +50,7 @@ def split_num_list(ctx, param, value):
 
 @click.command()
 @click.argument('data_file', type=click.File('r'))
+@click.option('--symbol_number', default=None, type=int)
 @click.option('--lpf-size', default=30)
 @click.option('--threshold-size', default=600)
 @click.option('--threshold-lag', default=100)
@@ -73,12 +74,12 @@ def main(*args, **kwargs):
     return run(*args, **kwargs, logging_level=logging.INFO)
 
 
-def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
+def run(data_file, symbol_number=None, lpf_size=30, threshold_size=600, threshold_lag=100,
          threshold_std=4.0, sample_factor=3, limiting_threshold_percentile=10,
          limiting_std_factor=.7, limiting_threshold=None, limiting_std=None,
          rank_method='min', run_raw=False, run_limited=False, run_ranked=True,
          antenna_select=None, antenna_method='average', graph=False,
-         interactive=False, logging_level=logging.ERROR):
+         interactive=False, logging_level=logging.ERROR, executor=None):
 
     if logging_level:
         LOGGER.setLevel(logging_level)
@@ -96,7 +97,7 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
                                              antenna_select=antenna_select,
                                              antenna_method=antenna_method)
 
-    symbol = get_symbol(experiment_data, sample_factor)
+    symbol = get_symbol(experiment_data, sample_factor, symbol_number)
 
     LOGGER.info("Location: %s", experiment_data['location'])
     LOGGER.info("Description: %s", experiment_data['description'])
@@ -155,7 +156,8 @@ def run(data_file, lpf_size=30, threshold_size=600, threshold_lag=100,
                                      name='ranked',
                                      limiting_func=lambda x: x,
                                      correlation_func=partial(rank_correlation,
-                                                              method=rank_method),
+                                                              method=rank_method,
+                                                              executor=executor),
                                      threshold_func=partial(std_factor_threshold,
                                                             factor=threshold_std))
         end = time.time()
@@ -237,7 +239,7 @@ def run_rank_correlation(samples, symbol, method='average'):
     return correlation[len(symbol):]
 
 
-def rank_correlation(samples, symbol, num_splits=8, method='average'):
+def rank_correlation(samples, symbol, num_splits=8, method='average', executor=None):
     split_index = round(len(samples) / num_splits)
 
     # Split up samples into parts
@@ -253,7 +255,17 @@ def rank_correlation(samples, symbol, num_splits=8, method='average'):
         split_samples.append(samples[start:end])
 
     # Process the different parts in parallel
-    with concurrent.futures.ProcessPoolExecutor(max_workers=min(num_splits, psutil.cpu_count())) as executor:
+    if not executor:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=min(num_splits, psutil.cpu_count())) as executor:
+            futures = {}
+            for i, d in enumerate(split_samples):
+                f = executor.submit(run_rank_correlation, d, symbol, method=method)
+                futures[f] = i
+
+            results = []
+            for future in concurrent.futures.as_completed(futures):
+                results.append((futures[future], future.result()))
+    else:
         futures = {}
         for i, d in enumerate(split_samples):
             f = executor.submit(run_rank_correlation, d, symbol, method=method)
@@ -318,18 +330,21 @@ def norm_limit_samples(raw_samples, threshold_percentile=10, std_factor=.7,
     return samples
 
 
-def get_symbol(experiment_data, sample_factor, symbols_file='symbols.yaml'):
+def get_symbol(experiment_data, sample_factor, symbol_number=None, symbols_file='symbols.yaml'):
     with open(symbols_file) as f:
         symbols = yaml.load(f)
 
-    if 'symbol_number' not in experiment_data:
-        LOGGER.warning("symbol_number is not specified in experiment data. Using symbol 1.")
-        symbol = symbols[1]
-    else:
-        # experiment_data['symbol_number'] = 2
-        # experiment_data['symbol_number'] = 3
+    if symbol_number:
+        # If user provided a symbol number
+        LOGGER.info("Using symbol number: %s", symbol_number)
+        symbol = symbols[symbol_number]
+    elif 'symbol_number' in experiment_data:
+        # Otherwise, use symbol number embedded in data file
         LOGGER.info("Using symbol number: %s", experiment_data['symbol_number'])
         symbol = symbols[experiment_data['symbol_number']]
+    else:
+        LOGGER.warning("symbol_number is not specified in experiment data. Using symbol 1.")
+        symbol = symbols[1]
 
     symbol = np.array(symbol) * 2 - 1
     symbol = np.repeat(symbol, sample_factor)
