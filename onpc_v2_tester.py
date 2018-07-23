@@ -182,9 +182,9 @@ def get_details(result):
             'Filename': result.name}
 
 
-def get_symbol_groups(result):
+def get_symbol_groups(result, tolerence):
     detected_signal_index = [x for x, y in result.main_result.detected_signal]
-    groups = list(get_consecutive_number_groups(detected_signal_index))
+    groups = list(get_consecutive_number_groups(detected_signal_index, tolerence=tolerence))
 
     new_groups = []
 
@@ -210,58 +210,78 @@ def get_symbol_summary(result):
     return str_out.getvalue()
 
 
-def get_result_score(result):
-    groups, diffs_between_groups = get_symbol_groups(result)
+def get_symbols(result, offset_limit=.3, tolerence=20):
+    groups, diffs_between_groups = get_symbol_groups(result, tolerence=tolerence)
+    # print(groups)
 
     run_time = result.metadata['run_time']
     chip_time = ureg(result.metadata['chip_time']).magnitude / 1e3
     symbol_size = result.metadata.get('symbol_size', 1023)
     symbol_time = chip_time * symbol_size
 
-    expected_received_symbols = round((run_time - symbol_time) / symbol_time)
+    all_found_peaks = []
+    for start_index in range(len(groups)):
+        # print("-------", start_index, "-------")
+        good_groups = []
+        bad_groups = []
+        prev_diff = 0
 
-    # print(run_time, symbol_time, expected_received_symbols)
-    # print(groups)
-    # print(diffs_between_groups)
-    # print(result.sample_period)
-    # print(symbol_time)
-    # print(symbol_time / result.sample_period.magnitude)
-    # exit()
+        peak = np.array(groups[start_index]).mean()
+        # print(peak)
+
+        peaks = np.array([np.array(group).mean() for group in groups[start_index:]])
+        peaks -= peak  # Put peak at zero
+        peaks_times = peaks * result.sample_period.magnitude  # Convert from sample number to time
+        # print(peaks_times + peak * result.sample_period.magnitude)
+        peaks_symbol_times = peaks_times / symbol_time  # Convert to number of symbols away
+        offsets = peaks_symbol_times % 1  # Remove whole number (we only care about offset)
+
+        # print(np.diff(peaks_times))
+        enough_space = list(np.diff(peaks_times) > 10)
+        enough_space = np.array([True] + enough_space)  # Need to pad the first value
+        # print(peaks_symbol_times)
+        # print(offsets)
+
+        detected_symbol = np.logical_and(enough_space,
+                                         np.logical_or(offsets < offset_limit,
+                                                       offsets > 1-offset_limit))
+
+        found_peaks = np.where(detected_symbol)[0]
+        found_peaks += start_index
+        # print(found_peaks)
+
+        all_found_peaks.append(found_peaks)
+
+    most_peaks = max(all_found_peaks, key=lambda x: len(x))
+
+    good_groups = []
+    bad_groups = []
+    for i, group in enumerate(groups):
+        if i in most_peaks:
+            good_groups.append(group)
+        else:
+            bad_groups.append(group)
+
+    return good_groups, bad_groups
+
+
+def get_result_score(result):
+    good, bad = get_symbols(result)
+
+    run_time = result.metadata['run_time']
+    chip_time = ureg(result.metadata['chip_time']).magnitude / 1e3
+    symbol_size = result.metadata.get('symbol_size', 1023)
+    symbol_time = chip_time * symbol_size
+    expected_received_symbols = round((run_time - symbol_time) / symbol_time)
 
     if not result.metadata.get('transmitting', True):
         return {"Total": 0,
                 "Correct": 0,
-                "False positive": len(groups)}
-
-    false_positive = 0
-    correct = 0
-    prev_diff = 0
-
-    if len(groups) > 0:
-        # Assume that the first symbol is correct
-        correct += 1
-
-    for diff in diffs_between_groups:
-        diff += prev_diff
-
-        time_diff = diff * result.sample_period.magnitude  # Convert from sample number diffs to time diffs
-        num_symbols = time_diff / symbol_time  # Number of symbols between groups
-        offset = abs(round(num_symbols) - num_symbols)
-        # print(f"Number of symbols: {num_symbols} ({offset})")
-
-        # print(diff, time_diff, offset)
-
-        # If the offset is far enough away, then it is a false positive
-        if time_diff < 10 or offset > .2:
-            false_positive += 1
-            prev_diff = diff
-        else:
-            correct += 1
-            prev_diff = 0
+                "False positive": len(good) + len(bad)}
 
     return {"Total": expected_received_symbols,
-            "Correct": correct,
-            "False positive": false_positive}
+            "Correct": len(good),
+            "False positive": len(bad)}
 
 
 def get_all_results_score(results):
@@ -286,25 +306,20 @@ def onpc(data_file, folder, lpf_size=30, threshold_size=600, threshold_lag=100,
     results = []
 
     with tqdm(total=len(data_files)) as pbar:
-        with concurrent.futures.ProcessPoolExecutor(max_workers=2) as executor:
-            futures = []
+        with concurrent.futures.ProcessPoolExecutor(max_workers=psutil.cpu_count()) as executor:
             for file in data_files:
-                f = executor.submit(onpc_v2.run,
-                                    file,
-                                    lpf_size=lpf_size,
-                                    threshold_size=threshold_size,
-                                    threshold_lag=threshold_lag,
-                                    threshold_std=threshold_std,
-                                    rank_method=rank_method,
-                                    antenna_select=antenna_select,
-                                    graph=False,
-                                    interactive=False)
-                futures.append(f)
-
-            results = []
-            for future in concurrent.futures.as_completed(futures):
+                result = onpc_v2.run(file,
+                                     lpf_size=lpf_size,
+                                     threshold_size=threshold_size,
+                                     threshold_lag=threshold_lag,
+                                     threshold_std=threshold_std,
+                                     rank_method=rank_method,
+                                     antenna_select=antenna_select,
+                                     graph=False,
+                                     interactive=False,
+                                     executor=executor)
+                results.append(result)
                 pbar.update()
-                results.append(future.result())
 
     return results
 
