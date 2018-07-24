@@ -363,13 +363,70 @@ def run_onpc(data_file, folder, lpf_size, threshold_size, threshold_lag,
 @click.option('-f', '--folder', multiple=True, help='Data folder')
 @click.option('-t', '--threshold_factor', 'threshold_factors', type=float,
               multiple=True, help='Threshold factor')
-def run_threshold_factor_test(data_file, folder, threshold_factors):
+@click.option('-s', '--start', type=float, default=None)
+@click.option('-e', '--end', type=float, default=None)
+@click.option('-n', '--number', type=float, default=None)
+def run_threshold_factor_test(data_file, folder, threshold_factors, start, end, number):
     scores = []
+    interval = 13.7
+    actual_peaks = {'1b288878c81d4885accaf7eb8d6bf2e3': np.arange(16.9, 413, interval),
+                    '3c52f85e46f74cb29b8d4bbc3ae961e1': np.arange(27.495, 413, interval),
+                    '5bec18c060a3493db900007fdb77ea60': np.arange(16.886, 413, interval),
+                    '66ec9013e9504104ba7cf6c2aef93d68': np.arange(16.483, 410, interval),
+                    '7b20a1adccb348ff9a18ad934e08b3e9': np.arange(22.671, 413, interval),
+                    'a026cb5b821b4df8ace9360231ec236b': np.arange(30.803, 413, interval),
+                    'aaecd371c93d4d4da81858d83bd8981c': np.arange(20.803, 413, interval),
+                    'e7ef6b71022f4151a377760da6be6ba5': np.arange(25.821, 413, interval),
+                    'fc79d1bd0caa4975b0fc86db8634b4a7': np.arange(21.673, 413, interval)}
+    tolerence = 2
+
+    if start and end and number:
+        threshold_factors = list(threshold_factors) + list(np.linspace(start, end, number))
+
     for factor in threshold_factors:
         results = onpc(data_file, folder, threshold_std=factor)
-        score = get_all_results_score(results)
-        score['Threshold Factor'] = factor
-        scores.append(score)
+        false_positives = 0
+        false_positives_total = 0
+        num_detected = 0
+        total_symbols = 0
+
+        for result in results:
+            correlation = result.main_result.correlation
+            threshold = result.main_result.threshold
+            sample_period = result.sample_period.magnitude
+
+            correlation = np.nan_to_num(correlation)
+            threshold = np.nan_to_num(threshold)
+
+            # Find all false positives
+            prev_start = 0
+            for g in actual_peaks[result.name]:
+                start = int(round(prev_start / sample_period))
+                end = int(round((g - tolerence) / sample_period))
+                end = end if end < len(correlation) else len(correlation) - 1
+
+                above_threshold = correlation[start:end] > threshold[start:end]
+                false_positives += above_threshold.sum()
+                false_positives_total += (correlation[start:end] > 0).sum()
+
+                prev_start = g + tolerence
+
+            # Find all detected symbols
+            for g in actual_peaks[result.name]:
+                start = int(round((g - tolerence) / sample_period))
+                end = int(round((g + tolerence) / sample_period))
+                above_threshold = any(correlation[start:end] > threshold[start:end])
+
+                if above_threshold:
+                    num_detected += 1
+
+            total_symbols += len(actual_peaks[result.name])
+
+        scores.append({'threshold_factor': factor,
+                       'correct': num_detected,
+                       'total_correct': total_symbols,
+                       'false_positives': int(false_positives),
+                       'false_positives_total': int(false_positives_total)})
 
     print(json.dumps(scores, indent=2))
 
