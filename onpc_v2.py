@@ -239,7 +239,8 @@ def run_rank_correlation(samples, symbol, method='average'):
     return correlation[len(symbol):]
 
 
-def rank_correlation(samples, symbol, num_splits=8, method='average', executor=None):
+def rank_correlation(samples, symbol, num_splits=None, method='average', executor=None):
+    num_splits = num_splits or psutil.cpu_count()
     split_index = round(len(samples) / num_splits)
 
     # Split up samples into parts
@@ -256,7 +257,7 @@ def rank_correlation(samples, symbol, num_splits=8, method='average', executor=N
 
     # Process the different parts in parallel
     if not executor:
-        with concurrent.futures.ProcessPoolExecutor(max_workers=min(num_splits, psutil.cpu_count())) as executor:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=num_splits) as executor:
             futures = {}
             for i, d in enumerate(split_samples):
                 f = executor.submit(run_rank_correlation, d, symbol, method=method)

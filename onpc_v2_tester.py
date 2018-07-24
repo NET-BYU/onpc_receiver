@@ -17,7 +17,6 @@ import time
 import click
 from glom import glom
 from jinja2 import FileSystemLoader, Environment
-import json
 import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
