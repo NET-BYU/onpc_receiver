@@ -181,8 +181,11 @@ def get_details(result):
             'Filename': result.name}
 
 
-def get_symbol_groups(result, tolerence):
-    detected_signal_index = [x for x, y in result.main_result.detected_signal]
+def get_symbol_groups(result, tolerence, result_name='main'):
+    if result_name == 'main':
+        detected_signal_index = [x for x, y in result.main_result.detected_signal]
+    else:
+        detected_signal_index = [x for x, y in result.results[result_name].detected_signal]
     groups = list(get_consecutive_number_groups(detected_signal_index, tolerence=tolerence))
 
     new_groups = []
@@ -209,8 +212,8 @@ def get_symbol_summary(result):
     return str_out.getvalue()
 
 
-def get_symbols(result, offset_limit=.3, tolerence=20):
-    groups, diffs_between_groups = get_symbol_groups(result, tolerence=tolerence)
+def get_symbols(result, offset_limit=.3, tolerence=20, result_name='main'):
+    groups, diffs_between_groups = get_symbol_groups(result, tolerence=tolerence, result_name=result_name)
     # print(groups)
 
     run_time = result.metadata['run_time']
@@ -426,6 +429,8 @@ def run_threshold_factor_test(data_file, folder, threshold_factors, start, end, 
                        'total_correct': total_symbols,
                        'false_positives': int(false_positives),
                        'false_positives_total': int(false_positives_total)})
+
+
 
     print(json.dumps(scores, indent=2))
 
