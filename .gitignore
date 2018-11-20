@@ -1,3 +1,4 @@
+__pycache__
 tests*
 wl_params_results
 *.pdf
