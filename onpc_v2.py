@@ -363,8 +363,13 @@ def prepare_samples(data, sample_factor=3, antenna_select=None, antenna_method='
         LOGGER.error("antenna_select must have at least one value")
         exit()
 
-    selected_antennas = [antennas[i].interpolate() for i in antenna_select]
+
+    LOGGER.warning("{}/{} of the values were NaNs".format(np.isnan(antennas[0]).sum(),
+                                                          len(antennas[0])))
+    selected_antennas = [antennas[i].interpolate(limit_direction="both") for i in antenna_select]
     antenna_data = np.stack(selected_antennas)
+
+
 
     if antenna_method == 'average':
         samples = antenna_data.mean(axis=0)

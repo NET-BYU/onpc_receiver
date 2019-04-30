@@ -71,7 +71,11 @@ def cli():
 
 def get_consecutive_number_groups(lst, tolerence=20):
     groups = itertools.groupby(enumerate(lst), lambda x: x[0]-x[1])
-    prev = list(map(itemgetter(1), next(groups)[1]))
+    try:
+        prev = list(map(itemgetter(1), next(groups)[1]))
+    except StopIteration:
+        # This means groups is empty
+        return []
 
     for k, g in groups:
         current = list(map(itemgetter(1), g))
@@ -253,6 +257,9 @@ def get_symbols(result, offset_limit=.3, tolerence=20, result_name='main'):
         # print(found_peaks)
 
         all_found_peaks.append(found_peaks)
+
+    if len(all_found_peaks) == 0:
+        return [], []
 
     most_peaks = max(all_found_peaks, key=lambda x: len(x))
 

@@ -16,6 +16,7 @@ psutil = "*"
 tqdm = "*"
 pyyaml = "*"
 paramiko = "*"
+pyperclip = "*"
 
 [dev-packages]
 

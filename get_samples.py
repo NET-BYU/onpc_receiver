@@ -89,7 +89,13 @@ def get_samples(remote, name, folder, num_samples, tap, distance, location,
     ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command(command)
     time_results = ssh_stderr.read().decode().split('\n')[0]
     re_result = re.search("(\\d+)m (\\d+.\\d+)s", time_results)
-    run_time = int(re_result.group(1)) * 60 + float(re_result.group(2))
+
+    try:
+        run_time = int(re_result.group(1)) * 60 + float(re_result.group(2))
+    except AttributeError:
+        print("Error: Unable to find a group in the regex result")
+        print(time_results)
+        exit()
 
     # Get samples
     ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command('cat data.out')
